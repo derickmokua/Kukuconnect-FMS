@@ -1,26 +1,186 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
+@theme {
+  --color-primary: #780019;
+  --color-primary-container: #9b1c2c;
+  --color-on-primary: #ffffff;
+  --color-on-primary-container: #ffadad;
+  --color-primary-fixed: #ffdad9;
+  --color-secondary: #835400;
+  --color-secondary-container: #fcab28;
+  --color-on-secondary: #ffffff;
+  --color-on-secondary-container: #694300;
+  --color-secondary-fixed: #ffddb5;
+  --color-secondary-fixed-dim: #ffb957;
+  --color-tertiary: #00430d;
+  --color-tertiary-container: #015d16;
+  --color-tertiary-fixed: #a3f69c;
+  --color-on-tertiary-fixed-variant: #005312;
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #93000a;
+  --color-background: #f9f9f9;
+  --color-on-background: #1a1c1c;
+  --color-on-surface: #1a1c1c;
+  --color-on-surface-variant: #594141;
+  --color-surface: #f9f9f9;
+  --color-surface-bright: #f9f9f9;
+  --color-surface-container: #eeeeee;
+  --color-surface-container-low: #f3f3f3;
+  --color-surface-container-high: #e8e8e8;
+  --color-surface-container-highest: #e2e2e2;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-variant: #e2e2e2;
+  --color-outline: #8c7070;
+  --color-outline-variant: #e0bfbe;
+  --color-inverse-surface: #2f3131;
+
+  --font-sans: var(--font-manrope), "Manrope", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-jetbrains), "JetBrains Mono", ui-monospace, monospace;
+
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: light;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background-color: #f9f9f9;
+  color: #1a1c1c;
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+.tabular-money {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+.material-symbols-outlined {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  font-size: 1.5rem;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  font-feature-settings: "liga";
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+.material-symbols-outlined.fill {
+  font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 24;
+}
+
+/* Design system surfaces */
+.level-1-card {
+  background-color: #ffffff;
+  border: 1px solid #e0bfbe;
+}
+
+.level-2-surface {
+  background-color: #f3f3f3;
+  border: 1px solid #e0bfbe;
+}
+
+.metric-shadow {
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.05);
+}
+
+.farm-card {
+  background-color: #ffffff;
+  border: 1px solid #e0bfbe;
+  box-shadow: 0 4px 20px -5px rgba(0, 0, 0, 0.05);
+}
+
+.font-label-caps {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 16px;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.font-data {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+
+input:focus,
+select:focus,
+textarea:focus,
+button:focus-visible {
+  outline: none;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: #780019 !important;
+  box-shadow: 0 0 0 1px #780019;
+}
+
+/* Form controls (light) */
+.kc-input {
+  width: 100%;
+  background: #ffffff;
+  border: 1px solid #e0bfbe;
+  border-radius: 0.5rem;
+  padding: 0.75rem 1rem;
+  color: #1a1c1c;
+  font-size: 0.9375rem;
+}
+
+.kc-btn-primary {
+  background: #780019;
+  color: #ffffff;
+  border-radius: 0.5rem;
+  font-weight: 600;
+  transition: opacity 0.15s, transform 0.1s;
+}
+
+.kc-btn-primary:hover {
+  opacity: 0.92;
+}
+
+.kc-btn-primary:active {
+  transform: scale(0.98);
+}
+
+.kc-btn-secondary {
+  background: #ffffff;
+  color: #1a1c1c;
+  border: 1px solid #e0bfbe;
+  border-radius: 0.5rem;
+  font-weight: 500;
+}
+
+.kc-btn-secondary:hover {
+  background: #e2e2e2;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: #f9f9f9;
+}
+::-webkit-scrollbar-thumb {
+  background: #dadada;
+  border-radius: 10px;
 }
