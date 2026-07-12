@@ -8,6 +8,7 @@ import { getDataMode } from "@/lib/data/mode";
 import { MAIN_NAV, isNavActive, pageTitle } from "@/lib/nav";
 import Logo from "./Logo";
 import Breadcrumbs from "./Breadcrumbs";
+import FarmAssistant from "./FarmAssistant";
 
 const BARE_PATHS = ["/login", "/order"];
 
@@ -290,6 +291,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             {children}
           </div>
         </main>
+
+        {/* Staff AI: alerts + suggestions (hidden on public /order and /login) */}
+        <FarmAssistant />
 
         {/* Mobile bottom tabs — Home is primary way back on phone */}
         <nav

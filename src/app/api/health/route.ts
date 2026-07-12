@@ -28,6 +28,7 @@ export async function GET() {
 
   const atKey = Boolean(process.env.AFRICASTALKING_API_KEY);
   const atUser = Boolean(process.env.AFRICASTALKING_USERNAME);
+  const aiKey = Boolean(process.env.XAI_API_KEY?.trim());
 
   const checks = {
     app: "kukuconnect-v1",
@@ -45,6 +46,13 @@ export async function GET() {
       staffPhoneConfigured: staffOk || Boolean(staffPhone && staffPhone.length >= 9),
       africastalking: atKey && atUser,
       whatsappWorksWithoutSms: true,
+    },
+    ai: {
+      configured: aiKey,
+      provider: "spacexai-xai",
+      note: aiKey
+        ? "Farm assistant AI enabled"
+        : "Rule-based alerts work; set XAI_API_KEY for AI suggestions/chat",
     },
     timestamp: new Date().toISOString(),
   };

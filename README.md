@@ -69,6 +69,8 @@ Copy `.env.example` to `.env.local` (never commit real secrets).
 | `AFRICASTALKING_API_KEY` | Optional | SMS (server only) |
 | `AFRICASTALKING_USERNAME` | Optional | e.g. `sandbox` or live username |
 | `AFRICASTALKING_FROM` | Optional | Sender ID / shortcode |
+| `XAI_API_KEY` | Optional | Staff farm assistant (alerts AI + chat). [console.x.ai](https://console.x.ai) |
+| `XAI_MODEL` | Optional | Default `grok-4.5` |
 
 ---
 
