@@ -17,7 +17,9 @@ import {
   formatMonthLabel,
   lineCount,
   monthKeyFromDate,
+  saleDateYmd,
   sumSales,
+  updateSaleDate,
 } from "@/lib/sales";
 import { generateReceiptPdf } from "@/lib/receipt";
 import { downloadSalesReportPdf } from "@/lib/salesReport";
@@ -29,6 +31,8 @@ import {
   saveMovements,
 } from "@/lib/data/inventoryRepo";
 import { listSales, saveSales } from "@/lib/data/salesRepo";
+import { listLots, saveLots } from "@/lib/data/brooderRepo";
+import { deductBrooderLotsForSale, todayIsoLocal } from "@/lib/brooder";
 import {
   Button,
   Card,
@@ -70,6 +74,9 @@ export default function Sales() {
   const [receiptBusy, setReceiptBusy] = useState(false);
   const [monthFilter, setMonthFilter] = useState(monthKeyFromDate());
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [saleDate, setSaleDate] = useState(todayIsoLocal());
+  const [editDateSaleId, setEditDateSaleId] = useState<string | null>(null);
+  const [editDateValue, setEditDateValue] = useState("");
 
   useEffect(() => {
     let cancelled = false;
@@ -154,6 +161,7 @@ export default function Sales() {
   const recordSale = async () => {
     if (cart.length === 0) return alert("Cart is empty");
     const saleId = `sale-${Date.now()}`;
+    const saleCreatedAt = new Date(saleDate + "T12:00:00").toISOString();
     try {
       const items = await listItems();
       const movements = await listMovements();
@@ -161,7 +169,8 @@ export default function Sales() {
         items,
         movements,
         cart.map((c) => ({ itemId: c.itemId, qty: c.qty })),
-        saleId
+        saleId,
+        saleCreatedAt
       );
       if (!result.ok) {
         alert(result.error ?? "Could not deduct stock");
@@ -171,6 +180,18 @@ export default function Sales() {
       await saveItems(result.items);
       await saveMovements(result.movements);
       setInventory(result.items);
+
+      // Deduct sold chicks from active brooder lots
+      const activeLots = await listLots();
+      const nextLots = deductBrooderLotsForSale(
+        activeLots,
+        cart.map((c) => {
+          const item = items.find((i) => i.id === c.itemId);
+          const isDiscounted = item ? c.price < item.defaultPrice : false;
+          return { itemId: c.itemId, qty: c.qty, isDiscounted };
+        })
+      );
+      await saveLots(nextLots);
 
       const sale = createSale({
         id: saleId,
@@ -186,6 +207,8 @@ export default function Sales() {
         paymentMethod,
         mpesaCode: paymentMethod === "M-Pesa" ? mpesaCode : "",
         servedBy,
+        createdAt: saleCreatedAt,
+        dateLabel: new Date(saleCreatedAt).toLocaleString("en-KE"),
       });
 
       const nextSales = addSale(sales, sale);
@@ -205,9 +228,34 @@ export default function Sales() {
       setCustomer("");
       setCustomerPhone("");
       setMpesaCode("");
+      setSaleDate(todayIsoLocal());
       setMonthFilter(monthKeyFromDate());
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to record sale");
+    }
+  };
+
+  const handleSaveSaleDate = async (saleId: string) => {
+    if (!editDateValue) return;
+    try {
+      const nextSales = updateSaleDate(sales, saleId, editDateValue);
+      await saveSales(nextSales);
+      setSales(nextSales);
+
+      // Keep stock movement history aligned with the corrected business date
+      const when = new Date(editDateValue + "T12:00:00").toISOString();
+      const movements = await listMovements();
+      const nextMovements = movements.map((m) =>
+        m.refId === saleId && m.type === "sale"
+          ? { ...m, createdAt: when }
+          : m
+      );
+      await saveMovements(nextMovements);
+
+      setEditDateSaleId(null);
+      setMonthFilter(monthKeyFromDate(new Date(editDateValue + "T12:00:00")));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save sale date");
     }
   };
 
@@ -349,6 +397,14 @@ export default function Sales() {
                     placeholder="07…"
                   />
                 </Field>
+                <Field label="Sale Date">
+                  <Input
+                    type="date"
+                    required
+                    value={saleDate}
+                    onChange={(e) => setSaleDate(e.target.value)}
+                  />
+                </Field>
                 <Field label="Payment">
                   <Select
                     value={paymentMethod}
@@ -480,12 +536,52 @@ export default function Sales() {
                         <p className="font-semibold text-on-surface">
                           {sale.customer || "Walk-in customer"}
                         </p>
-                        <p className="text-sm text-on-surface-variant">
-                          {sale.dateLabel}
+                        <div className="text-sm text-on-surface-variant flex flex-wrap items-center gap-1.5">
+                          {editDateSaleId === sale.id ? (
+                            <span className="flex items-center gap-1.5">
+                              <input
+                                type="date"
+                                value={editDateValue}
+                                onChange={(e) => setEditDateValue(e.target.value)}
+                                className="bg-surface-container-highest text-on-surface rounded px-2 py-0.5 text-xs border border-outline-variant focus:outline-none"
+                              />
+                              <button
+                                type="button"
+                                className="text-primary text-xs font-semibold hover:underline"
+                                onClick={() => handleSaveSaleDate(sale.id)}
+                              >
+                                Save
+                              </button>
+                              <button
+                                type="button"
+                                className="text-on-surface-variant text-xs hover:underline"
+                                onClick={() => setEditDateSaleId(null)}
+                              >
+                                Cancel
+                              </button>
+                            </span>
+                          ) : (
+                            <>
+                              <span>{sale.dateLabel}</span>
+                              <button
+                                type="button"
+                                className="text-primary text-[11px] font-medium hover:underline opacity-80 hover:opacity-100 flex items-center gap-0.5"
+                                onClick={() => {
+                                  setEditDateSaleId(sale.id);
+                                  setEditDateValue(
+                                    saleDateYmd(sale) || sale.createdAt.slice(0, 10)
+                                  );
+                                }}
+                              >
+                                <span className="material-symbols-outlined text-[12px]">edit</span>
+                                edit date
+                              </button>
+                            </>
+                          )}
                           {sale.paymentMethod
                             ? ` · ${sale.paymentMethod}`
                             : ""}
-                        </p>
+                        </div>
                         <p className="text-xs text-on-surface-variant mt-0.5">
                           {lineCount(sale)} items
                           {sale.receiptNumber

@@ -1,4 +1,4 @@
-/** Browser localStorage helpers (client-only). */
+/** Browser localStorage helpers (client-only). Safe on Safari private / restricted storage. */
 
 export function loadJson<T>(key: string, fallback: T): T {
   if (typeof window === "undefined") return fallback;
@@ -13,5 +13,10 @@ export function loadJson<T>(key: string, fallback: T): T {
 
 export function saveJson<T>(key: string, value: T): void {
   if (typeof window === "undefined") return;
-  localStorage.setItem(key, JSON.stringify(value));
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch (err) {
+    // QuotaExceeded / private mode — avoid crashing the whole page on mobile
+    console.warn("[storage] save failed for", key, err);
+  }
 }

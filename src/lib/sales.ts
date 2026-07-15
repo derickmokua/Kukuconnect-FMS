@@ -56,12 +56,14 @@ export function createSale(input: {
   mpesaCode?: string;
   servedBy?: string;
   receiptNumber?: string;
+  createdAt?: string;
+  dateLabel?: string;
 }): Sale {
-  const now = new Date();
+  const now = input.createdAt ? new Date(input.createdAt) : new Date();
   return {
     id: input.id ?? `sale-${Date.now()}`,
     createdAt: now.toISOString(),
-    dateLabel: now.toLocaleString("en-KE"),
+    dateLabel: input.dateLabel ?? now.toLocaleString("en-KE"),
     customer: input.customer.trim(),
     customerPhone: input.customerPhone.trim(),
     items: input.items,
@@ -79,6 +81,37 @@ export function addSale(sales: Sale[], sale: Sale): Sale[] {
 
 export function deleteSale(sales: Sale[], id: string): Sale[] {
   return sales.filter((s) => s.id !== id);
+}
+
+/**
+ * Correct the business date of an existing sale (e.g. logged a day late).
+ * Accepts YYYY-MM-DD; stores noon local → ISO for stable month filters.
+ */
+export function updateSaleDate(
+  sales: Sale[],
+  id: string,
+  dateYmd: string
+): Sale[] {
+  const ymd = dateYmd.trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return sales;
+  const when = new Date(`${ymd}T12:00:00`);
+  if (Number.isNaN(when.getTime())) return sales;
+  return sales.map((s) =>
+    s.id === id
+      ? {
+          ...s,
+          createdAt: when.toISOString(),
+          dateLabel: when.toLocaleString("en-KE"),
+        }
+      : s
+  );
+}
+
+/** Local calendar YYYY-MM-DD from a sale timestamp */
+export function saleDateYmd(sale: Sale): string {
+  const d = new Date(sale.createdAt);
+  if (Number.isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 /** YYYY-MM for a Date or ISO string */

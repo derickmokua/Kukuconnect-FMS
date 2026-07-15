@@ -65,6 +65,7 @@ const DEFAULT_ITEMS: Omit<InventoryItem, "updatedAt">[] = [
     sellable: false,
     system: true,
   },
+  // Chick default prices match kukuconnect.co.ke (GrowthTimeline)
   {
     id: ITEM_IDS.dayOld,
     name: "1 Day Old Chick",
@@ -72,7 +73,7 @@ const DEFAULT_ITEMS: Omit<InventoryItem, "updatedAt">[] = [
     quantity: 0,
     unit: "chicks",
     lowStockAt: 50,
-    defaultPrice: 150,
+    defaultPrice: 110,
     sellable: true,
     system: true,
   },
@@ -83,7 +84,7 @@ const DEFAULT_ITEMS: Omit<InventoryItem, "updatedAt">[] = [
     quantity: 0,
     unit: "chicks",
     lowStockAt: 30,
-    defaultPrice: 200,
+    defaultPrice: 130,
     sellable: true,
     system: true,
   },
@@ -94,7 +95,7 @@ const DEFAULT_ITEMS: Omit<InventoryItem, "updatedAt">[] = [
     quantity: 0,
     unit: "chicks",
     lowStockAt: 30,
-    defaultPrice: 280,
+    defaultPrice: 160,
     sellable: true,
     system: true,
   },
@@ -105,7 +106,7 @@ const DEFAULT_ITEMS: Omit<InventoryItem, "updatedAt">[] = [
     quantity: 0,
     unit: "chicks",
     lowStockAt: 20,
-    defaultPrice: 350,
+    defaultPrice: 190,
     sellable: true,
     system: true,
   },
@@ -116,7 +117,7 @@ const DEFAULT_ITEMS: Omit<InventoryItem, "updatedAt">[] = [
     quantity: 0,
     unit: "birds",
     lowStockAt: 20,
-    defaultPrice: 500,
+    defaultPrice: 250,
     sellable: true,
     system: true,
   },
@@ -250,6 +251,7 @@ export function applyStockChange(
     note?: string;
     refId?: string;
     allowNegative?: boolean;
+    createdAt?: string;
   }
 ): ApplyResult {
   const idx = items.findIndex((i) => i.id === input.itemId);
@@ -289,7 +291,7 @@ export function applyStockChange(
     delta,
     balanceAfter: nextQty,
     note: input.note?.trim() ?? "",
-    createdAt: nowIso(),
+    createdAt: input.createdAt ?? nowIso(),
     refId: input.refId,
   };
 
@@ -396,7 +398,8 @@ export function deductForSale(
   items: InventoryItem[],
   movements: StockMovement[],
   lines: SaleLine[],
-  saleId: string
+  saleId: string,
+  createdAt?: string
 ): ApplyResult {
   // Validate first
   for (const line of lines) {
@@ -426,6 +429,7 @@ export function deductForSale(
       type: "sale",
       note: `Sale #${saleId}`,
       refId: String(saleId),
+      createdAt,
     });
     if (!result.ok) return result;
     nextItems = result.items;
@@ -440,7 +444,8 @@ export function addFromHatch(
   movements: StockMovement[],
   hatchedCount: number,
   batchName: string,
-  batchId: string
+  batchId: string,
+  createdAt?: string
 ): ApplyResult {
   const count = Math.floor(hatchedCount);
   if (count <= 0) {
@@ -452,6 +457,7 @@ export function addFromHatch(
     type: "hatch",
     note: `Hatch from ${batchName}`,
     refId: batchId,
+    createdAt,
   });
 }
 

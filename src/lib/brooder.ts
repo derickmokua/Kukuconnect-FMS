@@ -44,7 +44,13 @@ export interface BrooderLot {
   name: string;
   /** Hatch / placed date YYYY-MM-DD */
   hatchDate: string;
+  /**
+   * Birds still on farm for this lot.
+   * Canonical formula: initial − mortality − sales − discounted.
+   */
   quantity: number;
+  /** Birds placed / hatched into this lot */
+  initialQuantity: number;
   /** Inventory SKU currently holding this lot */
   stageId: BrooderStageId;
   breed: string;
@@ -53,8 +59,115 @@ export interface BrooderLot {
   /** Last calendar day age-up was applied YYYY-MM-DD */
   lastAgedDate: string;
   totalMortality: number;
+  /** Full-price (or list) sales deducted from this lot */
+  totalSales: number;
+  /** Discounted / free / below-list chicks deducted from this lot */
+  totalDiscounted: number;
   createdAt: string;
   closedAt: string | null;
+  brooder: string;
+}
+
+/**
+ * Remaining stock for a brooder lot.
+ * remaining = placed − mortality − sales − discounted chicks
+ */
+export function remainingFromBreakdown(input: {
+  initialQuantity: number;
+  totalMortality?: number;
+  totalSales?: number;
+  totalDiscounted?: number;
+}): number {
+  const placed = Math.max(0, Math.floor(input.initialQuantity || 0));
+  const mort = Math.max(0, Math.floor(input.totalMortality ?? 0));
+  const sold = Math.max(0, Math.floor(input.totalSales ?? 0));
+  const disc = Math.max(0, Math.floor(input.totalDiscounted ?? 0));
+  return Math.max(0, placed - mort - sold - disc);
+}
+
+/** Infer placed qty for older lots that never stored initialQuantity. */
+export function effectiveInitialQuantity(lot: BrooderLot): number {
+  const stored = Math.floor(lot.initialQuantity ?? 0);
+  if (stored > 0) return stored;
+  const inferred =
+    Math.max(0, Math.floor(lot.quantity || 0)) +
+    Math.max(0, Math.floor(lot.totalMortality ?? 0)) +
+    Math.max(0, Math.floor(lot.totalSales ?? 0)) +
+    Math.max(0, Math.floor(lot.totalDiscounted ?? 0));
+  return inferred > 0 ? inferred : Math.max(0, Math.floor(lot.quantity || 0));
+}
+
+/**
+ * Recompute `quantity` + open/closed status from breakdown counters.
+ * Does not touch inventory — caller must apply stock delta if needed.
+ */
+export function withSyncedRemaining(
+  lot: BrooderLot,
+  patch?: Partial<
+    Pick<
+      BrooderLot,
+      | "initialQuantity"
+      | "totalMortality"
+      | "totalSales"
+      | "totalDiscounted"
+      | "name"
+      | "breed"
+      | "notes"
+      | "hatchDate"
+      | "brooder"
+    >
+  >
+): BrooderLot {
+  const initialQuantity = Math.max(
+    0,
+    Math.floor(patch?.initialQuantity ?? effectiveInitialQuantity(lot))
+  );
+  const totalMortality = Math.max(
+    0,
+    Math.floor(patch?.totalMortality ?? lot.totalMortality ?? 0)
+  );
+  const totalSales = Math.max(
+    0,
+    Math.floor(patch?.totalSales ?? lot.totalSales ?? 0)
+  );
+  const totalDiscounted = Math.max(
+    0,
+    Math.floor(patch?.totalDiscounted ?? lot.totalDiscounted ?? 0)
+  );
+  const quantity = remainingFromBreakdown({
+    initialQuantity,
+    totalMortality,
+    totalSales,
+    totalDiscounted,
+  });
+  const closed = quantity === 0;
+  return {
+    ...lot,
+    ...patch,
+    initialQuantity,
+    totalMortality,
+    totalSales,
+    totalDiscounted,
+    quantity,
+    status: closed ? "closed" : "active",
+    closedAt: closed
+      ? lot.closedAt ?? new Date().toISOString()
+      : null,
+  };
+}
+
+/** Normalize legacy lots so remaining always matches the formula. */
+export function normalizeLot(lot: BrooderLot): BrooderLot {
+  return withSyncedRemaining(lot, {
+    initialQuantity: effectiveInitialQuantity(lot),
+    totalMortality: lot.totalMortality ?? 0,
+    totalSales: lot.totalSales ?? 0,
+    totalDiscounted: lot.totalDiscounted ?? 0,
+  });
+}
+
+export function normalizeLots(lots: BrooderLot[]): BrooderLot[] {
+  return lots.map(normalizeLot);
 }
 
 export interface MortalityEvent {
@@ -116,6 +229,7 @@ export function createLot(input: {
   breed?: string;
   notes?: string;
   stageId?: BrooderStageId;
+  brooder?: string;
 }): BrooderLot {
   const qty = Math.max(0, Math.floor(input.quantity));
   const age = ageDays(input.hatchDate);
@@ -128,14 +242,18 @@ export function createLot(input: {
     name: input.name.trim() || "Brooder lot",
     hatchDate: input.hatchDate,
     quantity: qty,
+    initialQuantity: qty,
     stageId: stage.id,
     breed: input.breed?.trim() ?? "",
     notes: input.notes?.trim() ?? "",
     status: qty > 0 ? "active" : "closed",
     lastAgedDate: today,
     totalMortality: 0,
+    totalSales: 0,
+    totalDiscounted: 0,
     createdAt: new Date().toISOString(),
     closedAt: qty > 0 ? null : new Date().toISOString(),
+    brooder: input.brooder?.trim() || "Unassigned",
   };
 }
 
@@ -257,6 +375,7 @@ export function applyMortality(
     type: "loss",
     note: `Mortality: ${lot.name}${input.reason ? ` — ${input.reason}` : ""}`,
     refId: lot.id,
+    createdAt: input.date ? new Date(input.date + "T12:00:00").toISOString() : undefined,
   });
   if (!r.ok) {
     return {
@@ -269,14 +388,9 @@ export function applyMortality(
     };
   }
 
-  const remaining = lot.quantity - qty;
-  const nextLot: BrooderLot = {
-    ...lot,
-    quantity: remaining,
-    totalMortality: lot.totalMortality + qty,
-    status: remaining === 0 ? "closed" : "active",
-    closedAt: remaining === 0 ? new Date().toISOString() : lot.closedAt,
-  };
+  const nextLot = withSyncedRemaining(lot, {
+    totalMortality: (lot.totalMortality ?? 0) + qty,
+  });
 
   const event: MortalityEvent = {
     id: `mort-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
@@ -308,6 +422,7 @@ export function placeInBrooder(
     quantity: number;
     breed?: string;
     notes?: string;
+    brooder?: string;
   }
 ): {
   ok: boolean;
@@ -356,6 +471,124 @@ export function lotFromHatch(input: {
     notes: `From incubation ${input.batchId}`,
     stageId: ITEM_IDS.dayOld,
   });
+}
+
+/**
+ * Deduct chick quantities from active brooder lots when a sale occurs.
+ * Full-price sales → totalSales; below-list / free → totalDiscounted.
+ * Remaining is always recomputed: placed − mortality − sales − discounted.
+ */
+export function deductBrooderLotsForSale(
+  lots: BrooderLot[],
+  soldItems: { itemId: string; qty: number; isDiscounted?: boolean }[]
+): BrooderLot[] {
+  let nextLots = normalizeLots(lots);
+  const chickItemIds = new Set<string>([
+    ITEM_IDS.dayOld,
+    ITEM_IDS.week1,
+    ITEM_IDS.week2,
+    ITEM_IDS.week3,
+    ITEM_IDS.month1,
+    ITEM_IDS.meatBird,
+  ]);
+
+  for (const sold of soldItems) {
+    if (!chickItemIds.has(sold.itemId)) continue;
+    let remainingToDeduct = Math.max(0, Math.floor(sold.qty));
+
+    nextLots = nextLots.map((lot) => {
+      if (remainingToDeduct <= 0) return lot;
+      if (
+        lot.status !== "active" ||
+        lot.stageId !== sold.itemId ||
+        lot.quantity <= 0
+      ) {
+        return lot;
+      }
+      const deduct = Math.min(lot.quantity, remainingToDeduct);
+      remainingToDeduct -= deduct;
+
+      return withSyncedRemaining(lot, {
+        totalSales: (lot.totalSales ?? 0) + (sold.isDiscounted ? 0 : deduct),
+        totalDiscounted:
+          (lot.totalDiscounted ?? 0) + (sold.isDiscounted ? deduct : 0),
+      });
+    });
+  }
+
+  return nextLots;
+}
+
+/**
+ * Apply a manual correction to lot counters and sync inventory stock
+ * for the quantity delta on the lot's current stage SKU.
+ */
+export function applyLotCorrection(
+  lots: BrooderLot[],
+  items: InventoryItem[],
+  movements: StockMovement[],
+  lotId: string,
+  patch: Partial<
+    Pick<
+      BrooderLot,
+      | "name"
+      | "breed"
+      | "notes"
+      | "hatchDate"
+      | "brooder"
+      | "initialQuantity"
+      | "totalMortality"
+      | "totalSales"
+      | "totalDiscounted"
+    >
+  >
+): {
+  ok: boolean;
+  error?: string;
+  lots: BrooderLot[];
+  items: InventoryItem[];
+  movements: StockMovement[];
+} {
+  const idx = lots.findIndex((l) => l.id === lotId);
+  if (idx === -1) {
+    return { ok: false, error: "Lot not found", lots, items, movements };
+  }
+  const prev = normalizeLot(lots[idx]);
+  const next = withSyncedRemaining(prev, patch);
+  const delta = next.quantity - prev.quantity;
+
+  let nextItems = items;
+  let nextMovements = movements;
+  if (delta !== 0) {
+    const r = applyStockChange(nextItems, nextMovements, {
+      itemId: prev.stageId,
+      delta,
+      type: "adjust",
+      note: `Lot correction: ${next.name} remaining ${prev.quantity} → ${next.quantity}`,
+      refId: lotId,
+      allowNegative: true,
+    });
+    if (!r.ok) {
+      return {
+        ok: false,
+        error: r.error ?? "Could not sync inventory",
+        lots,
+        items,
+        movements,
+      };
+    }
+    nextItems = r.items;
+    nextMovements = r.movements;
+  }
+
+  const nextLots = [...lots];
+  nextLots[idx] = next;
+  return {
+    ok: true,
+    lots: nextLots,
+    items: nextItems,
+    movements: nextMovements,
+  };
 }
 
 export function activeLotsSummary(lots: BrooderLot[]) {

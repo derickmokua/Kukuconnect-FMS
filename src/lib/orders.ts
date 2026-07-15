@@ -5,7 +5,7 @@ export const ORDERS_STORAGE_KEY = "kukuconnect-farmer-orders";
 
 export type OrderStatus = "pending" | "paid" | "fulfilled" | "cancelled";
 export type Breed = "kuroiler" | "rainbow_rooster";
-export type ChickAge = "day_old" | "week_3";
+export type ChickAge = "day_old" | "week_1" | "week_2" | "week_3" | "week_4";
 export type OrderSource = "web" | "admin" | "whatsapp" | "phone";
 
 export interface OrderLine {
@@ -43,43 +43,56 @@ export interface OrderProduct {
   blurb: string;
 }
 
-/** Sellable catalogue for rural Kitui farmers */
+/**
+ * Sellable catalogue for the public order form (app.kukuconnect.co.ke/order).
+ * Prices match kukuconnect.co.ke GrowthTimeline chick stages:
+ * Day Old 110 · 1 Week 130 · 2 Weeks 160 · 3 Weeks 190 · 4 Weeks 250
+ */
 export const ORDER_PRODUCTS: OrderProduct[] = [
   {
-    id: "day-old-kuroiler",
+    id: "day-old-chicks",
     breed: "kuroiler",
     age: "day_old",
     itemId: ITEM_IDS.dayOld,
-    name: "Day-old Kuroiler",
-    unitPrice: 150,
-    blurb: "Strong dual-purpose · ready after hatch",
+    name: "Day-old Chicks",
+    unitPrice: 110,
+    blurb: "Freshly hatched · requires brooder heat & care",
   },
   {
-    id: "day-old-rainbow",
-    breed: "rainbow_rooster",
-    age: "day_old",
-    itemId: ITEM_IDS.dayOld,
-    name: "Day-old Rainbow Rooster",
-    unitPrice: 150,
-    blurb: "Hardy layers/broilers for villages",
+    id: "1-week-chicks",
+    breed: "kuroiler",
+    age: "week_1",
+    itemId: ITEM_IDS.week1,
+    name: "1-week-old Chicks",
+    unitPrice: 130,
+    blurb: "Active and alert · starter feed",
   },
   {
-    id: "week3-kuroiler",
+    id: "2-weeks-chicks",
+    breed: "kuroiler",
+    age: "week_2",
+    itemId: ITEM_IDS.week2,
+    name: "2-weeks-old Chicks",
+    unitPrice: 160,
+    blurb: "Strong immunity · past high early risk",
+  },
+  {
+    id: "3-weeks-chicks",
     breed: "kuroiler",
     age: "week_3",
     itemId: ITEM_IDS.week3,
-    name: "3-week Kuroiler",
-    unitPrice: 350,
-    blurb: "Vaccinated window · lower early mortality",
+    name: "3-weeks-old Chicks",
+    unitPrice: 190,
+    blurb: "Feathering well · Newcastle vaccinated",
   },
   {
-    id: "week3-rainbow",
-    breed: "rainbow_rooster",
-    age: "week_3",
-    itemId: ITEM_IDS.week3,
-    name: "3-week Rainbow Rooster",
-    unitPrice: 350,
-    blurb: "Grown past fragile first weeks",
+    id: "4-weeks-chicks",
+    breed: "kuroiler",
+    age: "week_4",
+    itemId: ITEM_IDS.month1,
+    name: "4-weeks-old (1 Month) Chicks",
+    unitPrice: 250,
+    blurb: "Hardened · ready for the outside coop",
   },
 ];
 
@@ -88,7 +101,14 @@ export function breedLabel(breed: Breed): string {
 }
 
 export function ageLabel(age: ChickAge): string {
-  return age === "day_old" ? "Day-old" : "3 weeks";
+  const labels: Record<ChickAge, string> = {
+    day_old: "Day-old",
+    week_1: "1 week",
+    week_2: "2 weeks",
+    week_3: "3 weeks",
+    week_4: "4 weeks (1 month)",
+  };
+  return labels[age];
 }
 
 export function statusLabel(status: OrderStatus): string {

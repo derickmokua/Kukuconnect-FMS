@@ -29,14 +29,34 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const isHome = pathname === "/";
   const title = pageTitle(pathname);
 
+  // Public farmer form: no FMS chrome (logo, "Farm Management System", staff links)
+  if (pathname.startsWith("/order")) {
+    return (
+      <div className="min-h-screen bg-[linear-gradient(180deg,#faf8f7_0%,#f3f3f3_100%)] flex flex-col">
+        <main className="flex-1 p-4 sm:p-8 max-w-xl w-full mx-auto">
+          {children}
+        </main>
+        <footer className="px-4 py-4 text-center text-xs text-on-surface-variant">
+          Questions? WhatsApp{" "}
+          <a
+            href="https://wa.me/254716883375"
+            className="text-primary font-medium hover:underline"
+            target="_blank"
+            rel="noreferrer"
+          >
+            0716 883 375
+          </a>
+        </footer>
+      </div>
+    );
+  }
+
+  // Staff login only — keep product branding for internal users
   if (bare) {
     return (
       <div className="min-h-screen bg-[linear-gradient(180deg,#faf8f7_0%,#f3f3f3_100%)] flex flex-col">
         <header className="sticky top-0 z-40 min-h-24 flex items-center justify-between px-4 sm:px-10 py-2 shrink-0 border-b border-outline-variant/60 bg-white/80 backdrop-blur-md">
-          <Link
-            href={pathname.startsWith("/login") ? "/" : "/order"}
-            className="flex items-center gap-4 min-w-0"
-          >
+          <Link href="/" className="flex items-center gap-4 min-w-0">
             <Logo size={88} priority />
             <div className="min-w-0">
               <p className="text-primary font-bold text-xl leading-tight tracking-tight">
@@ -48,43 +68,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </div>
           </Link>
           <div className="flex items-center gap-3 shrink-0">
-            {pathname.startsWith("/order") ? (
-              <>
-                <Link
-                  href="/"
-                  className="hidden sm:inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-                >
-                  <span className="material-symbols-outlined text-base">
-                    dashboard
-                  </span>
-                  Staff dashboard
-                </Link>
-                <Link
-                  href="/login"
-                  className="text-sm font-medium text-on-surface-variant hover:text-primary"
-                >
-                  Login
-                </Link>
-              </>
-            ) : (
-              <>
-                <Link
-                  href="/"
-                  className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
-                >
-                  <span className="material-symbols-outlined text-base">
-                    home
-                  </span>
-                  Dashboard
-                </Link>
-                <Link
-                  href="/order"
-                  className="text-sm font-medium text-on-surface-variant hover:text-primary"
-                >
-                  Public order
-                </Link>
-              </>
-            )}
+            <Link
+              href="/"
+              className="inline-flex items-center gap-1 text-sm font-medium text-primary hover:underline"
+            >
+              <span className="material-symbols-outlined text-base">home</span>
+              Dashboard
+            </Link>
           </div>
         </header>
         <main className="flex-1 p-4 sm:p-10">{children}</main>

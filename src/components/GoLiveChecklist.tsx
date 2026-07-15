@@ -11,6 +11,13 @@ import { mpesaTillHint } from "@/lib/orders";
 
 type Health = {
   cloud?: { ready?: boolean };
+  schema?: {
+    reachable?: boolean;
+    coreOk?: boolean;
+    missingCore?: string[];
+    missingOptional?: string[];
+    message?: string;
+  };
   payments?: { tillConfigured?: boolean };
   notifications?: {
     staffPhoneConfigured?: boolean;
@@ -67,6 +74,21 @@ export default function GoLiveChecklist() {
     const stockOk = dayOld > 0 || week3 > 0;
     const cloudOk = mode === "cloud" && Boolean(health.cloud?.ready);
     const loggedIn = !configured || Boolean(user);
+    const schema = health.schema;
+    const sqlOk =
+      !cloudOk
+        ? false
+        : schema?.coreOk === true
+          ? schema.missingOptional?.length
+            ? null
+            : true
+          : schema?.reachable === false
+            ? false
+            : false;
+    const sqlDetail = !cloudOk
+      ? "Run after creating the Supabase project"
+      : schema?.message ||
+        "Confirm you ran schema.sql + orders.sql (+ brooder.sql)";
 
     const next: Check[] = [
       {
@@ -83,10 +105,8 @@ export default function GoLiveChecklist() {
       {
         id: "sql",
         label: "Database tables (you run SQL once)",
-        ok: cloudOk ? null : false,
-        detail: cloudOk
-          ? "Confirm you ran schema.sql + orders.sql in Supabase"
-          : "Run after creating the Supabase project",
+        ok: sqlOk,
+        detail: sqlDetail,
       },
       {
         id: "auth",
@@ -97,7 +117,7 @@ export default function GoLiveChecklist() {
             ? "Local mode — no login required"
             : user
               ? `Signed in as ${user.email}`
-              : "Create user in Supabase Auth, then /login",
+              : "Create user in Supabase Auth (Auto Confirm), then /login on each device",
         href: "/login",
       },
       {

@@ -14,6 +14,11 @@ export function getSupabase(): SupabaseClient | null {
       persistSession: true,
       autoRefreshToken: true,
       detectSessionInUrl: true,
+      // localStorage is fine on modern mobile browsers; storage errors are
+      // handled inside @supabase/gotrue-js. Keep flow simple for password login.
+      flowType: "pkce",
+      storage:
+        typeof window !== "undefined" ? window.localStorage : undefined,
     },
   });
   return browserClient;

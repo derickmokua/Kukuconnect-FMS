@@ -5,15 +5,40 @@ create table if not exists public.brooder_lots (
   name text not null,
   hatch_date date not null,
   quantity integer not null default 0,
+  initial_quantity integer not null default 0,
   stage_id text not null,
   breed text not null default '',
   notes text not null default '',
   status text not null default 'active',
   last_aged_date date not null,
   total_mortality integer not null default 0,
+  total_sales integer not null default 0,
+  total_discounted integer not null default 0,
   created_at timestamptz not null default now(),
-  closed_at timestamptz
+  closed_at timestamptz,
+  brooder text not null default 'Unassigned'
 );
+
+-- Migrate existing databases (safe to re-run)
+alter table public.brooder_lots
+  add column if not exists brooder text not null default 'Unassigned';
+alter table public.brooder_lots
+  add column if not exists initial_quantity integer not null default 0;
+alter table public.brooder_lots
+  add column if not exists total_sales integer not null default 0;
+alter table public.brooder_lots
+  add column if not exists total_discounted integer not null default 0;
+
+-- Backfill placed qty where missing (best-effort from remaining + outs)
+update public.brooder_lots
+set initial_quantity = greatest(
+  initial_quantity,
+  coalesce(quantity, 0)
+    + coalesce(total_mortality, 0)
+    + coalesce(total_sales, 0)
+    + coalesce(total_discounted, 0)
+)
+where initial_quantity = 0;
 
 create table if not exists public.mortality_events (
   id text primary key,

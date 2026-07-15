@@ -24,6 +24,8 @@ import {
 import { deductForSale } from "@/lib/inventory";
 import { addSale, createSale } from "@/lib/sales";
 import { listSales, saveSales } from "@/lib/data/salesRepo";
+import { listLots, saveLots } from "@/lib/data/brooderRepo";
+import { deductBrooderLotsForSale } from "@/lib/brooder";
 import NotifyButtons from "@/components/NotifyButtons";
 import {
   describeNotifyResult,
@@ -128,6 +130,14 @@ export default function AdminOrdersPage() {
       }
       await saveItems(result.items);
       await saveMovements(result.movements);
+
+      // Deduct sold chicks from active brooder lots
+      const activeLots = await listLots();
+      const nextLots = deductBrooderLotsForSale(
+        activeLots,
+        Array.from(byItem.entries()).map(([itemId, qty]) => ({ itemId, qty }))
+      );
+      await saveLots(nextLots);
 
       const sale = createSale({
         id: `sale-from-${order.id}`,

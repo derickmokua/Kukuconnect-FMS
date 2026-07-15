@@ -28,6 +28,7 @@ export interface IncubationBatch {
 export interface HatchResult {
   hatchedCount: number;
   notes?: string;
+  hatchedAt?: string;
 }
 
 export function createBatch(input: {
@@ -95,14 +96,50 @@ export function isDueOrOverdue(batch: IncubationBatch, now: Date = new Date()): 
 export function hatchBatch(batch: IncubationBatch, result: HatchResult): IncubationBatch {
   const remaining = getEggsStillIn(batch);
   const hatched = Math.min(remaining, Math.max(0, Math.floor(result.hatchedCount)));
+  const dateStr = result.hatchedAt
+    ? /^\d{4}-\d{2}-\d{2}$/.test(result.hatchedAt)
+      ? new Date(result.hatchedAt + "T12:00:00").toISOString()
+      : new Date(result.hatchedAt).toISOString()
+    : new Date().toISOString();
   return {
     ...batch,
     status: "hatched",
     hatchedCount: hatched,
-    hatchedAt: new Date().toISOString(),
+    hatchedAt: dateStr,
     notes: result.notes?.trim()
       ? [batch.notes, result.notes.trim()].filter(Boolean).join("\n")
       : batch.notes,
+  };
+}
+
+/**
+ * Correct hatch date (and optional count) after the fact.
+ * Does not touch inventory — UI should sync movements / brooder lots.
+ */
+export function updateHatchRecord(
+  batch: IncubationBatch,
+  patch: { hatchedAt?: string; hatchedCount?: number; notes?: string }
+): IncubationBatch {
+  if (batch.status !== "hatched") return batch;
+  let hatchedAt = batch.hatchedAt;
+  if (patch.hatchedAt) {
+    hatchedAt = /^\d{4}-\d{2}-\d{2}$/.test(patch.hatchedAt)
+      ? new Date(patch.hatchedAt + "T12:00:00").toISOString()
+      : new Date(patch.hatchedAt).toISOString();
+  }
+  const remaining = getEggsStillIn(batch);
+  const hatchedCount =
+    patch.hatchedCount !== undefined
+      ? Math.min(remaining, Math.max(0, Math.floor(patch.hatchedCount)))
+      : batch.hatchedCount;
+  return {
+    ...batch,
+    hatchedAt,
+    hatchedCount,
+    notes:
+      patch.notes !== undefined
+        ? patch.notes.trim()
+        : batch.notes,
   };
 }
 
