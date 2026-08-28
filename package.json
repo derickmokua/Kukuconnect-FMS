@@ -29,5 +29,9 @@
     "typescript": "^5",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^4.1.11"
+  },
+  "allowScripts": {
+    "sharp": true,
+    "unrs-resolver": true
   }
 }
