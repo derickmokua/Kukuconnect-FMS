@@ -47,11 +47,6 @@ drop policy if exists "auth all farmer_order_items" on public.farmer_order_items
 create policy "auth all farmer_order_items" on public.farmer_order_items
   for all to authenticated using (true) with check (true);
 
--- Public: place orders only (no read of others' data)
+-- Public: can no longer insert directly. Must use submit_public_order RPC.
 drop policy if exists "anon insert farmer_orders" on public.farmer_orders;
-create policy "anon insert farmer_orders" on public.farmer_orders
-  for insert to anon with check (true);
-
 drop policy if exists "anon insert farmer_order_items" on public.farmer_order_items;
-create policy "anon insert farmer_order_items" on public.farmer_order_items
-  for insert to anon with check (true);

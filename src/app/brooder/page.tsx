@@ -5,6 +5,7 @@ import {
   type BrooderLot,
   type MortalityEvent,
   ageDays,
+  formatAge,
   applyDailyAgeUp,
   applyLotCorrection,
   applyMortality,
@@ -17,13 +18,14 @@ import {
   activeLotsSummary,
   BROODER_STAGES,
 } from "@/lib/brooder";
-import { listLots, saveLots, listMortality, saveMortality } from "@/lib/data/brooderRepo";
+import { listLots, saveLots, listMortality, saveMortality, upsertLotCloud, deleteLotCloud } from "@/lib/data/brooderRepo";
 import {
   listItems,
   listMovements,
   saveItems,
   saveMovements,
 } from "@/lib/data/inventoryRepo";
+import { adjustInventoryTransaction, recordMortalityTransaction } from "@/lib/data/transactions";
 import {
   Badge,
   Button,
@@ -80,10 +82,18 @@ export default function BrooderPage() {
     const items = await listItems();
     const movements = await listMovements();
     const result = applyDailyAgeUp(currentLots, items, movements);
+    // saveLots handles metadata changes, preserves quantity
     await saveLots(result.lots);
-    await saveItems(result.items);
-    await saveMovements(result.movements);
-    setLots(result.lots);
+    
+    // Apply inventory changes transactionally
+    for (const t of result.transitions) {
+      await adjustInventoryTransaction(t.from, -t.qty, "adjust", `Brooder age-up: out`, t.lotId, true);
+      await adjustInventoryTransaction(t.to, t.qty, "adjust", `Brooder age-up: in`, t.lotId, true);
+    }
+    
+    const [nextLots, nextItems, nextMovements] = await Promise.all([listLots(), listItems(), listMovements()]);
+    setLots(nextLots);
+
     if (result.transitions.length) {
       setAgeMsg(
         `Aged up ${result.transitions.length} lot(s): ` +
@@ -97,7 +107,7 @@ export default function BrooderPage() {
     } else {
       setAgeMsg("Daily check complete — no stage changes.");
     }
-    return result.lots;
+    return nextLots;
   }, []);
 
   useEffect(() => {
@@ -149,20 +159,26 @@ export default function BrooderPage() {
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const items = await listItems();
+      const movements = await listMovements();
       const result = placeInBrooder(
         lots,
-        await listItems(),
-        await listMovements(),
+        items,
+        movements,
         { name, hatchDate, quantity: qty, breed, brooder }
       );
-      if (!result.ok) {
+      if (!result.ok || !result.lot) {
         alert(result.error);
         return;
       }
+      // Force save the new lot
+      await upsertLotCloud(result.lot);
       await saveLots(result.lots);
-      await saveItems(result.items);
-      await saveMovements(result.movements);
-      setLots(result.lots);
+      
+      // Atomic inventory increment
+      await adjustInventoryTransaction(result.lot.stageId, result.lot.quantity, "in", `Brooder in: ${result.lot.name}`, result.lot.id, true);
+      
+      setLots(await listLots());
       setShowAdd(false);
       setName("");
       setQty(100);
@@ -189,23 +205,43 @@ export default function BrooderPage() {
   const handleMortality = async () => {
     if (!mortLotId) return;
     try {
-      const result = applyMortality(
-        lots,
-        await listItems(),
-        await listMovements(),
-        mortality,
-        { lotId: mortLotId, qty: mortQty, reason: mortReason, date: mortDate }
-      );
-      if (!result.ok) {
-        alert(result.error);
+      const lot = lots.find(l => l.id === mortLotId);
+      if (!lot) return;
+      if (mortQty > lot.quantity) {
+        alert(`Only ${lot.quantity} birds in this lot`);
         return;
       }
-      await saveLots(result.lots);
-      await saveItems(result.items);
-      await saveMovements(result.movements);
-      await saveMortality(result.events);
-      setLots(result.lots);
-      setMortality(result.events);
+
+      const event: MortalityEvent = {
+        id: `mort-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        lotId: lot.id,
+        lotName: lot.name,
+        qty: mortQty,
+        reason: mortReason.trim(),
+        date: mortDate,
+        createdAt: new Date().toISOString(),
+      };
+
+      const items = await listItems();
+      const stageItem = items.find(i => i.id === lot.stageId);
+      const movement = stageItem ? {
+        id: `mov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        itemId: stageItem.id,
+        itemName: stageItem.name,
+        type: "loss" as any,
+        delta: -mortQty,
+        balanceAfter: 0,
+        note: `Mortality: ${lot.name}${mortReason ? ` — ${mortReason}` : ""}`,
+        refId: lot.id,
+        createdAt: mortDate ? new Date(mortDate + "T12:00:00").toISOString() : new Date().toISOString(),
+      } : null;
+
+      await recordMortalityTransaction(event, movement);
+      
+      const [l, m] = await Promise.all([listLots(), listMortality()]);
+      setLots(l);
+      setMortality(m);
+      
       setMortLotId(null);
       setMortQty(1);
       setMortReason("");
@@ -230,10 +266,15 @@ export default function BrooderPage() {
   const handleSaveLot = async () => {
     if (!editLotId) return;
     try {
+      const items = await listItems();
+      const movements = await listMovements();
+      const prev = lots.find(l => l.id === editLotId);
+      if (!prev) return;
+      
       const result = applyLotCorrection(
         lots,
-        await listItems(),
-        await listMovements(),
+        items,
+        movements,
         editLotId,
         {
           name: editLotName.trim(),
@@ -250,10 +291,18 @@ export default function BrooderPage() {
         alert(result.error ?? "Could not save lot");
         return;
       }
+
+      const nextLot = result.lots.find(l => l.id === editLotId)!;
+      // Force update cloud to overwrite calculated quantities
+      await upsertLotCloud(nextLot);
       await saveLots(result.lots);
-      await saveItems(result.items);
-      await saveMovements(result.movements);
-      setLots(result.lots);
+
+      const delta = nextLot.quantity - prev.quantity;
+      if (delta !== 0) {
+        await adjustInventoryTransaction(prev.stageId, delta, "adjust", `Lot correction: ${nextLot.name} remaining ${prev.quantity} → ${nextLot.quantity}`, editLotId, true);
+      }
+
+      setLots(await listLots());
       setEditLotId(null);
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to edit lot");
@@ -265,7 +314,7 @@ export default function BrooderPage() {
   return (
     <div className="max-w-4xl mx-auto space-y-6">
       <PageHeader
-        title="Brooder"
+        title="Active Flocks"
         description="Daily age-up moves chicks between stock stages. Log mortality separately from sales."
         actions={
           <>
@@ -292,7 +341,7 @@ export default function BrooderPage() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatCard label="Active lots" value={String(summary.activeCount)} />
         <StatCard
-          label="Birds in brooder"
+          label="Birds in flocks"
           value={summary.totalBirds.toLocaleString()}
         />
         <StatCard
@@ -336,7 +385,7 @@ export default function BrooderPage() {
           <CardBody>
             <form onSubmit={handleAdd} className="space-y-4">
               <h3 className="font-semibold text-on-surface">
-                Place chicks in brooder
+                Place chicks in flock
               </h3>
               <p className="text-xs text-on-surface-variant">
                 Adds stock to inventory at the age band matching hatch date.
@@ -374,15 +423,15 @@ export default function BrooderPage() {
                     placeholder="Kuroiler / Rainbow"
                   />
                 </Field>
-                <Field label="Brooder location">
+                <Field label="Location">
                   <Select
                     value={brooder}
                     onChange={(e) => setBrooder(e.target.value)}
                   >
-                    <option value="Brooder 1">Brooder 1</option>
-                    <option value="Brooder 2">Brooder 2</option>
-                    <option value="Brooder 3">Brooder 3</option>
-                    <option value="Brooder 4">Brooder 4</option>
+                    <option value="House 1">House 1</option>
+                    <option value="House 2">House 2</option>
+                    <option value="House 3">House 3</option>
+                    <option value="House 4">House 4</option>
                     <option value="Unassigned">Unassigned</option>
                   </Select>
                 </Field>
@@ -394,7 +443,7 @@ export default function BrooderPage() {
       )}
 
       {active.length === 0 ? (
-        <EmptyState icon="house" title="No active brooder lots">
+        <EmptyState icon="house" title="No active flocks">
           Place a lot after hatch, or when you receive day-olds. Age-up runs
           automatically each day you open this page.
         </EmptyState>
@@ -429,7 +478,7 @@ export default function BrooderPage() {
                                 <Badge tone="primary">{stageLabel(lot.stageId)}</Badge>
                               </div>
                               <p className="text-xs text-on-surface-variant mt-1">
-                                Hatch {lot.hatchDate} · Day {age}
+                                Hatch {lot.hatchDate} · Age: {formatAge(age)}
                                 {lot.breed ? ` · ${lot.breed}` : ""}
                               </p>
                               {lot.notes && (
@@ -470,10 +519,10 @@ export default function BrooderPage() {
                                 onChange={(e) => handleMoveLot(lot.id, e.target.value)}
                                 className="text-xs bg-surface-container-low border border-outline-variant/60 rounded-lg px-2 py-1 text-on-surface focus:outline-none focus:ring-1 focus:ring-primary"
                               >
-                                <option value="Brooder 1">Brooder 1</option>
-                                <option value="Brooder 2">Brooder 2</option>
-                                <option value="Brooder 3">Brooder 3</option>
-                                <option value="Brooder 4">Brooder 4</option>
+                                <option value="House 1">House 1</option>
+                                <option value="House 2">House 2</option>
+                                <option value="House 3">House 3</option>
+                                <option value="House 4">House 4</option>
                                 <option value="Unassigned">Unassigned</option>
                               </select>
                             </div>

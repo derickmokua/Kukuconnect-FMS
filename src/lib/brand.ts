@@ -48,14 +48,32 @@ export interface BrandFonts {
   oblique: PDFFont;
 }
 
+/**
+ * Standard PDF fonts only support WinAnsi. Strip / replace chars that make
+ * pdf-lib throw (smart quotes, ellipsis, em dash, etc.) so receipts always print.
+ */
+export function pdfSafeText(input: unknown): string {
+  const s = String(input ?? "");
+  return s
+    .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
+    .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
+    .replace(/[\u2013\u2014\u2015]/g, "-")
+    .replace(/[\u2026]/g, "...")
+    .replace(/[\u00A0\u202F\u2007]/g, " ")
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, "?")
+    .trim();
+}
+
 /** Monospace fonts for classic till-slip receipts / sales reports. */
 export async function loadReceiptFonts(
   pdfDoc: PDFDocument
 ): Promise<BrandFonts> {
+  // Helvetica prints more cleanly on phones/thermal-style A4 than Courier
   const [regular, bold, oblique] = await Promise.all([
-    pdfDoc.embedFont(StandardFonts.Courier),
-    pdfDoc.embedFont(StandardFonts.CourierBold),
-    pdfDoc.embedFont(StandardFonts.CourierOblique),
+    pdfDoc.embedFont(StandardFonts.Helvetica),
+    pdfDoc.embedFont(StandardFonts.HelveticaBold),
+    pdfDoc.embedFont(StandardFonts.HelveticaOblique),
   ]);
   return { regular, bold, oblique };
 }
@@ -89,7 +107,8 @@ export const BRAND_CONTACT = "kukuconnect@outlook.com  |  Kitui, Kenya";
 
 export function formatKSh(amount: number): string {
   const n = Math.round(Number(amount) || 0);
-  return `KSh ${n.toLocaleString("en-KE")}`;
+  // Avoid locale quirks; plain ASCII for pdf-lib
+  return `KSh ${n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",")}`;
 }
 
 export function fitText(
@@ -98,12 +117,13 @@ export function fitText(
   size: number,
   maxWidth: number
 ): string {
-  if (font.widthOfTextAtSize(text, size) <= maxWidth) return text;
-  let t = text;
-  while (t.length > 1 && font.widthOfTextAtSize(`${t}…`, size) > maxWidth) {
+  const safe = pdfSafeText(text);
+  if (font.widthOfTextAtSize(safe, size) <= maxWidth) return safe;
+  let t = safe;
+  while (t.length > 1 && font.widthOfTextAtSize(`${t}...`, size) > maxWidth) {
     t = t.slice(0, -1);
   }
-  return `${t}…`;
+  return `${t}...`;
 }
 
 /** Load logo from public/ (browser). Prefers transparent PNG. */
@@ -112,8 +132,12 @@ export async function loadPublicLogoBytes(): Promise<ArrayBuffer | null> {
   const candidates = ["/logo_transparent.png", "/logo.png"];
   for (const path of candidates) {
     try {
-      const res = await fetch(`${path}?v=3`);
-      if (res.ok) return await res.arrayBuffer();
+      const res = await fetch(`${path}?v=4`);
+      if (!res.ok) continue;
+      const buf = await res.arrayBuffer();
+      // Skip empty / tiny broken assets
+      if (buf.byteLength < 100) continue;
+      return buf;
     } catch {
       /* try next */
     }
@@ -122,13 +146,20 @@ export async function loadPublicLogoBytes(): Promise<ArrayBuffer | null> {
 }
 
 export function downloadPdfBytes(bytes: Uint8Array, filename: string) {
-  const blob = new Blob([bytes as BlobPart], { type: "application/pdf" });
+  // Copy into a fresh ArrayBuffer-backed Uint8Array (avoids SharedArrayBuffer issues)
+  const copy = new Uint8Array(bytes.byteLength);
+  copy.set(bytes);
+  const blob = new Blob([copy], { type: "application/pdf" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = filename;
+  a.download = pdfSafeText(filename).replace(/[^\w.\-]+/g, "_") || "document.pdf";
+  a.rel = "noopener";
+  document.body.appendChild(a);
   a.click();
-  URL.revokeObjectURL(url);
+  a.remove();
+  // Delay revoke so mobile browsers finish the download
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 export type { RGB, PDFPage, PDFFont };

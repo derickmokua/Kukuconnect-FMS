@@ -1,5 +1,6 @@
 /**
- * Multi-page branded KukuConnect sales report (same slip styling as receipt).
+ * Multi-page branded KukuConnect sales report (same styling as receipt).
+ * WinAnsi-safe text so PDFs always generate and print.
  */
 import { PDFDocument, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import {
@@ -11,14 +12,16 @@ import {
   formatKSh,
   loadPublicLogoBytes,
   loadReceiptFonts,
+  pdfSafeText,
   type BrandFonts,
 } from "./brand";
 import type { Sale } from "./sales";
 import { formatMonthLabel, sumSales } from "./sales";
 import { ITEM_IDS } from "./inventory";
 
-const ROWS_PER_PAGE = 26;
-const MARGIN_X = 60;
+const ROWS_PER_PAGE = 22;
+const MARGIN_X = 40;
+const LOGO_SIZE = 56;
 
 export interface SalesReportRow {
   date: string;
@@ -55,8 +58,9 @@ export async function generateSalesReport(
   } = data;
 
   const pdfDoc = await PDFDocument.create();
-  pdfDoc.setTitle(`KukuConnect Sales Report - ${periodLabel}`);
+  pdfDoc.setTitle(pdfSafeText(`KukuConnect Sales Report - ${periodLabel}`));
   pdfDoc.setProducer("KukuConnect");
+  pdfDoc.setCreator("KukuConnect FMS");
 
   const fonts = await loadReceiptFonts(pdfDoc);
 
@@ -65,28 +69,39 @@ export async function generateSalesReport(
     logoImage = await embedLogo(pdfDoc, logoBytes);
   }
 
-  const chunks = chunk(sales, ROWS_PER_PAGE);
+  const safeRows = sales.map((r) => ({
+    date: r.date,
+    receiptNumber: pdfSafeText(r.receiptNumber || "-"),
+    customer: pdfSafeText(r.customer || "Walk-in"),
+    item: pdfSafeText(r.item || "-"),
+    amount: Number(r.amount) || 0,
+  }));
+
+  const chunks = chunk(safeRows, ROWS_PER_PAGE);
   const pageCount = Math.max(chunks.length, 1);
 
   for (let i = 0; i < pageCount; i++) {
     const page = pdfDoc.addPage([PAGE.width, PAGE.height]);
     const { width } = page.getSize();
     const centerX = width / 2;
-    let y = PAGE.height - 56;
+    let y = PAGE.height - 40;
 
     if (logoImage) {
-      const logoSize = 110;
+      const dims = logoImage.scale(1);
+      const scale = Math.min(LOGO_SIZE / dims.width, LOGO_SIZE / dims.height, 1);
+      const w = dims.width * scale;
+      const h = dims.height * scale;
       page.drawImage(logoImage, {
-        x: centerX - logoSize / 2,
-        y: y - logoSize,
-        width: logoSize,
-        height: logoSize,
+        x: centerX - w / 2,
+        y: y - h,
+        width: w,
+        height: h,
       });
-      y -= logoSize + 12;
+      y -= h + 10;
     } else {
       drawCentered(page, "KukuConnect", {
         y,
-        size: 14,
+        size: 16,
         font: fonts.bold,
         color: COLORS.charcoal,
       });
@@ -94,7 +109,7 @@ export async function generateSalesReport(
     }
 
     drawDashedRule(page, y, width, COLORS.yellow);
-    y -= 22;
+    y -= 18;
 
     drawCentered(page, "SALES REPORT", {
       y,
@@ -102,28 +117,49 @@ export async function generateSalesReport(
       font: fonts.bold,
       color: COLORS.charcoal,
     });
-    y -= 16;
-    drawCentered(page, `${periodLabel}  -  ${generatedFor}`, {
-      y,
-      size: 9,
-      font: fonts.oblique,
-      color: COLORS.orange,
-    });
-    y -= 20;
+    y -= 14;
+    drawCentered(
+      page,
+      pdfSafeText(`${periodLabel} - ${generatedFor}`),
+      {
+        y,
+        size: 9,
+        font: fonts.oblique,
+        color: COLORS.orange,
+      }
+    );
+    y -= 18;
 
     drawDashedRule(page, y, width, COLORS.fence);
-    y -= 22;
+    y -= 18;
 
     if (i === 0) {
       y = drawSummaryRow(page, { fonts, y, summary, width });
       y -= 6;
       drawDashedRule(page, y, width, COLORS.fence);
-      y -= 20;
+      y -= 16;
+    } else {
+      drawCentered(page, `(continued - page ${i + 1})`, {
+        y,
+        size: 8,
+        font: fonts.regular,
+        color: COLORS.slate,
+      });
+      y -= 14;
     }
 
     y = drawTableHeader(page, { fonts, y, width });
 
     const rows = chunks[i] || [];
+    if (rows.length === 0 && i === 0) {
+      page.drawText("No sales in this period.", {
+        x: MARGIN_X,
+        y,
+        size: 10,
+        font: fonts.regular,
+        color: COLORS.slate,
+      });
+    }
     for (const row of rows) {
       y = drawTableRow(page, { fonts, y, width, row });
     }
@@ -185,16 +221,25 @@ function drawSummaryRow(
       font: fonts.regular,
       color: COLORS.slate,
     });
-    page.drawText(card.value, {
+    // Fit long KSh values into column
+    let size = 11;
+    let value = card.value;
+    while (
+      size > 8 &&
+      fonts.bold.widthOfTextAtSize(value, size) > colWidth - 6
+    ) {
+      size -= 0.5;
+    }
+    page.drawText(value, {
       x,
-      y: y - 18,
-      size: 13,
+      y: y - 16,
+      size,
       font: fonts.bold,
       color: card.color,
     });
   });
 
-  return y - 34;
+  return y - 32;
 }
 
 function drawTableHeader(
@@ -203,47 +248,47 @@ function drawTableHeader(
 ) {
   const { fonts, width } = opts;
   let { y } = opts;
-  const cols = getColumns();
+  const cols = getColumns(width);
   page.drawText("DATE", {
     x: cols.date,
     y,
-    size: 8.5,
+    size: 8,
     font: fonts.bold,
     color: COLORS.charcoal,
   });
-  page.drawText("RECEIPT #", {
+  page.drawText("RECEIPT", {
     x: cols.receipt,
     y,
-    size: 8.5,
+    size: 8,
     font: fonts.bold,
     color: COLORS.charcoal,
   });
   page.drawText("CUSTOMER", {
     x: cols.customer,
     y,
-    size: 8.5,
+    size: 8,
     font: fonts.bold,
     color: COLORS.charcoal,
   });
   page.drawText("ITEM", {
     x: cols.item,
     y,
-    size: 8.5,
+    size: 8,
     font: fonts.bold,
     color: COLORS.charcoal,
   });
   const amountLabel = "AMOUNT";
-  const amountWidth = fonts.bold.widthOfTextAtSize(amountLabel, 8.5);
+  const amountWidth = fonts.bold.widthOfTextAtSize(amountLabel, 8);
   page.drawText(amountLabel, {
     x: width - MARGIN_X - amountWidth,
     y,
-    size: 8.5,
+    size: 8,
     font: fonts.bold,
     color: COLORS.charcoal,
   });
-  y -= 10;
+  y -= 8;
   drawDashedRule(page, y, width, COLORS.fence);
-  return y - 14;
+  return y - 12;
 }
 
 function drawTableRow(
@@ -257,52 +302,55 @@ function drawTableRow(
 ) {
   const { fonts, width, row } = opts;
   const y = opts.y;
-  const cols = getColumns();
-  const dateStr = new Date(row.date).toLocaleDateString("en-KE", {
-    month: "short",
-    day: "numeric",
-  });
+  const cols = getColumns(width);
+  const d = new Date(row.date);
+  const dateStr = Number.isNaN(d.getTime())
+    ? "-"
+    : d.toLocaleDateString("en-KE", {
+        month: "short",
+        day: "numeric",
+      });
 
-  page.drawText(dateStr, {
+  page.drawText(pdfSafeText(dateStr), {
     x: cols.date,
     y,
-    size: 9,
+    size: 8.5,
     font: fonts.regular,
     color: COLORS.charcoal,
   });
-  page.drawText(row.receiptNumber || "-", {
+  page.drawText(truncate(row.receiptNumber || "-", 12), {
     x: cols.receipt,
     y,
-    size: 9,
+    size: 8.5,
     font: fonts.regular,
     color: COLORS.slate,
   });
-  page.drawText(truncate(row.customer, 18), {
+  page.drawText(truncate(row.customer, 16), {
     x: cols.customer,
     y,
-    size: 9,
+    size: 8.5,
     font: fonts.regular,
     color: COLORS.charcoal,
   });
-  page.drawText(truncate(row.item, 20), {
+  page.drawText(truncate(row.item, 18), {
     x: cols.item,
     y,
-    size: 9,
+    size: 8.5,
     font: fonts.regular,
     color: COLORS.charcoal,
   });
 
   const amountStr = formatKSh(row.amount);
-  const amountWidth = fonts.bold.widthOfTextAtSize(amountStr, 9);
+  const amountWidth = fonts.bold.widthOfTextAtSize(amountStr, 8.5);
   page.drawText(amountStr, {
     x: width - MARGIN_X - amountWidth,
     y,
-    size: 9,
+    size: 8.5,
     font: fonts.bold,
     color: COLORS.green,
   });
 
-  return y - 18;
+  return y - 16;
 }
 
 function drawFooter(
@@ -315,21 +363,21 @@ function drawFooter(
   }
 ) {
   const { fonts, pageNumber, pageCount, width } = opts;
-  const y = 40;
-  drawDashedRule(page, y + 16, width, COLORS.fence);
-  page.drawText(BRAND_CONTACT, {
+  const y = 32;
+  drawDashedRule(page, y + 14, width, COLORS.fence);
+  page.drawText(pdfSafeText(BRAND_CONTACT), {
     x: MARGIN_X,
     y,
-    size: 8,
+    size: 7.5,
     font: fonts.regular,
     color: COLORS.slate,
   });
   const pageLabel = `Page ${pageNumber} of ${pageCount}`;
-  const labelWidth = fonts.regular.widthOfTextAtSize(pageLabel, 8);
+  const labelWidth = fonts.regular.widthOfTextAtSize(pageLabel, 7.5);
   page.drawText(pageLabel, {
     x: width - MARGIN_X - labelWidth,
     y,
-    size: 8,
+    size: 7.5,
     font: fonts.regular,
     color: COLORS.slate,
   });
@@ -344,8 +392,9 @@ function drawCentered(
 ) {
   const { y, size, font, color } = opts;
   const { width } = page.getSize();
-  const w = font.widthOfTextAtSize(text, size);
-  page.drawText(text, { x: width / 2 - w / 2, y, size, font, color });
+  const display = pdfSafeText(text);
+  const w = font.widthOfTextAtSize(display, size);
+  page.drawText(display, { x: width / 2 - w / 2, y, size, font, color });
 }
 
 function drawDashedRule(
@@ -363,17 +412,20 @@ function drawDashedRule(
   });
 }
 
-function getColumns() {
+function getColumns(pageWidth: number) {
+  // Spread columns across usable width
+  const usable = pageWidth - MARGIN_X * 2;
   return {
     date: MARGIN_X,
-    receipt: MARGIN_X + 60,
-    customer: MARGIN_X + 165,
-    item: MARGIN_X + 290,
+    receipt: MARGIN_X + usable * 0.14,
+    customer: MARGIN_X + usable * 0.34,
+    item: MARGIN_X + usable * 0.56,
   };
 }
 
 function truncate(str = "", max: number) {
-  return str.length > max ? `${str.slice(0, max - 1)}...` : str;
+  const s = pdfSafeText(str);
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
 }
 
 function chunk<T>(arr: T[], size: number): T[][] {
@@ -389,12 +441,12 @@ export function salesToReportRows(sales: Sale[]): SalesReportRow[] {
     const receipt =
       sale.receiptNumber ||
       `KC-RCT-${sale.id.replace(/\D/g, "").slice(-5).padStart(5, "0")}`;
-    if (sale.items.length === 0) {
+    if (!sale.items || sale.items.length === 0) {
       rows.push({
         date: sale.createdAt,
         receiptNumber: receipt,
         customer: sale.customer || "Walk-in",
-        item: "—",
+        item: "-",
         amount: sale.total,
       });
       continue;
@@ -404,7 +456,7 @@ export function salesToReportRows(sales: Sale[]): SalesReportRow[] {
         date: sale.createdAt,
         receiptNumber: receipt,
         customer: sale.customer || "Walk-in",
-        item: line.name,
+        item: `${line.name} x${line.qty}`,
         amount: line.qty * line.price,
       });
     }
@@ -416,7 +468,7 @@ export function summarizeSales(sales: Sale[]): SalesReportSummary {
   let birdsSold = 0;
   let eggsSold = 0;
   for (const sale of sales) {
-    for (const line of sale.items) {
+    for (const line of sale.items || []) {
       if (line.itemId === ITEM_IDS.trayEggs || /egg/i.test(line.name)) {
         eggsSold += line.qty;
       } else if (line.itemId !== ITEM_IDS.hatchingEggs) {
@@ -438,17 +490,26 @@ export async function downloadSalesReportPdf(opts: {
   monthKey: string;
   generatedFor?: string;
 }): Promise<void> {
-  const logoBytes = await loadPublicLogoBytes();
-  const periodLabel = formatMonthLabel(opts.monthKey);
-  const rows = salesToReportRows(opts.sales);
-  const summary = summarizeSales(opts.sales);
-  const bytes = await generateSalesReport({
-    periodLabel,
-    generatedFor: opts.generatedFor ?? "KukuConnect · Kitui",
-    summary,
-    sales: rows,
-    logoBytes,
-  });
-  const safe = periodLabel.replace(/\s+/g, "-");
-  downloadPdfBytes(bytes, `KukuConnect-Sales-Report-${safe}.pdf`);
+  try {
+    const logoBytes = await loadPublicLogoBytes();
+    const periodLabel = formatMonthLabel(opts.monthKey);
+    const rows = salesToReportRows(opts.sales);
+    const summary = summarizeSales(opts.sales);
+    const bytes = await generateSalesReport({
+      periodLabel,
+      generatedFor: opts.generatedFor ?? "KukuConnect · Kitui",
+      summary,
+      sales: rows,
+      logoBytes,
+    });
+    const safe = periodLabel.replace(/\s+/g, "-");
+    downloadPdfBytes(bytes, `KukuConnect-Sales-Report-${safe}.pdf`);
+  } catch (err) {
+    console.error("Sales report PDF failed", err);
+    throw new Error(
+      err instanceof Error
+        ? `Could not create sales report: ${err.message}`
+        : "Could not create sales report"
+    );
+  }
 }

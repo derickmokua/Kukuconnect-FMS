@@ -58,5 +58,7 @@ create policy "auth all brooder_lots" on public.brooder_lots
   for all to authenticated using (true) with check (true);
 
 drop policy if exists "auth all mortality_events" on public.mortality_events;
-create policy "auth all mortality_events" on public.mortality_events
-  for all to authenticated using (true) with check (true);
+create policy "select mortality_events" on public.mortality_events
+  for select to authenticated using (true);
+create policy "insert mortality_events" on public.mortality_events
+  for insert to authenticated with check (true);

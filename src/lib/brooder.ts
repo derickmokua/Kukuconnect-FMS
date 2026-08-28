@@ -211,6 +211,18 @@ export function ageDays(hatchDate: string, onDate: string = todayIsoLocal()): nu
   return Math.max(0, Math.floor((b.getTime() - a.getTime()) / 86400000));
 }
 
+export function formatAge(days: number): string {
+  if (days < 7) {
+    return `${days} day${days === 1 ? "" : "s"}`;
+  }
+  const weeks = Math.floor(days / 7);
+  const r = days % 7;
+  if (r === 0) {
+    return `${weeks} week${weeks === 1 ? "" : "s"}`;
+  }
+  return `${weeks} week${weeks === 1 ? "" : "s"}, ${r} day${r === 1 ? "" : "s"}`;
+}
+
 export function stageForAge(days: number): BrooderStage {
   return (
     BROODER_STAGES.find((s) => days >= s.minDay && days < s.maxDay) ??

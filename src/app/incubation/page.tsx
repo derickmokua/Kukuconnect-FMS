@@ -19,14 +19,16 @@ import {
 } from "@/lib/incubation";
 import { addFromHatch } from "@/lib/inventory";
 import { lotFromHatch } from "@/lib/brooder";
-import { listBatches, saveBatches } from "@/lib/data/incubationRepo";
+import { listBatches, insertBatch, updateBatch, deleteBatchCloud } from "@/lib/data/incubationRepo";
 import {
   listItems,
   listMovements,
   saveItems,
   saveMovements,
 } from "@/lib/data/inventoryRepo";
+import { ITEM_IDS } from "@/lib/inventory";
 import { listLots, saveLots } from "@/lib/data/brooderRepo";
+import { recordHatchTransaction } from "@/lib/data/transactions";
 import {
   MONTH_OPTIONS,
   availableYears,
@@ -95,14 +97,7 @@ export default function IncubationPage() {
     };
   }, []);
 
-  const persist = useCallback(async (next: IncubationBatch[]) => {
-    setBatches(next);
-    try {
-      await saveBatches(next);
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save batches");
-    }
-  }, []);
+  // targeted mutations used instead of persist
 
   const filtered = useMemo(() => {
     const sorted = [...batches].sort(
@@ -161,7 +156,10 @@ export default function IncubationPage() {
       return;
     }
     const batch = createBatch({ name, eggCount, startDate, incubationDays, notes });
-    persist([batch, ...batches]);
+    setBatches([batch, ...batches]);
+    insertBatch(batch).catch(err => {
+      alert(err instanceof Error ? err.message : "Failed to save batch");
+    });
     resetForm();
   };
 
@@ -185,39 +183,44 @@ export default function IncubationPage() {
       notes: hatchNotes,
       hatchedAt: hatchDate,
     });
-    const next = batches.map((b) => (b.id === hatchTargetId ? hatched : b));
-    await persist(next);
 
-    // Day-old chicks → inventory + brooder lot (for daily age-up / mortality)
+    let dayOldMovement = null;
+    let newBrooderLot = null;
+
     if (syncToBrooder && (hatched.hatchedCount ?? 0) > 0) {
-      try {
-        const invResult = addFromHatch(
-          await listItems(),
-          await listMovements(),
-          hatched.hatchedCount ?? 0,
-          hatched.name,
-          hatched.id,
-          hatched.hatchedAt ?? undefined
-        );
-        if (invResult.ok) {
-          await saveItems(invResult.items);
-          await saveMovements(invResult.movements);
-        }
-        const lot = lotFromHatch({
-          batchName: hatched.name,
-          hatchedCount: hatched.hatchedCount ?? 0,
-          batchId: hatched.id,
-          hatchDate: hatched.hatchedAt ? hatched.hatchedAt.slice(0, 10) : undefined,
-        });
-        const existingLots = await listLots();
-        await saveLots([lot, ...existingLots]);
-      } catch (err) {
-        alert(
-          err instanceof Error
-            ? err.message
-            : "Hatch saved but inventory/brooder update failed"
-        );
+      const items = await listItems();
+      const dayOldItem = items.find((i) => i.id === ITEM_IDS.dayOld);
+      if (dayOldItem) {
+        dayOldMovement = {
+          id: `mov-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          itemId: dayOldItem.id,
+          itemName: dayOldItem.name,
+          type: "hatch" as any,
+          delta: hatched.hatchedCount!,
+          balanceAfter: 0,
+          note: `Hatch: ${hatched.name}`,
+          refId: hatched.id,
+          createdAt: hatched.hatchedAt
+            ? new Date(hatched.hatchedAt + "T12:00:00").toISOString()
+            : new Date().toISOString(),
+        };
       }
+
+      newBrooderLot = lotFromHatch({
+        batchName: hatched.name,
+        hatchedCount: hatched.hatchedCount!,
+        batchId: hatched.id,
+        hatchDate: hatched.hatchedAt ? hatched.hatchedAt.slice(0, 10) : undefined,
+      });
+    }
+
+    try {
+      await recordHatchTransaction(hatched, dayOldMovement, newBrooderLot);
+      const nextBatches = await listBatches();
+      setBatches(nextBatches);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to record hatch");
+      return;
     }
 
     setHatchDate(todayIsoDate());
@@ -265,7 +268,15 @@ export default function IncubationPage() {
       }
       return updated;
     });
-    await persist(next);
+    setBatches(next);
+    const updatedBatch = next.find(b => b.id === editTargetId);
+    if (updatedBatch) {
+      try {
+        await updateBatch(updatedBatch);
+      } catch (err) {
+        alert(err instanceof Error ? err.message : "Failed to update batch");
+      }
+    }
 
     if (wasHatched && editHatchDate) {
       try {
@@ -307,7 +318,13 @@ export default function IncubationPage() {
         candlingNotes: candlingNotes.trim(),
       };
     });
-    persist(next);
+    setBatches(next);
+    const updatedBatch = next.find(b => b.id === candleTargetId);
+    if (updatedBatch) {
+      updateBatch(updatedBatch).catch(err => {
+        alert(err instanceof Error ? err.message : "Failed to save candling results");
+      });
+    }
     setCandleTargetId(null);
   };
 
@@ -319,12 +336,23 @@ export default function IncubationPage() {
     const next = batches.map((b) =>
       b.id === batch.id ? discardBatch(b, reason || undefined) : b
     );
-    persist(next);
+    setBatches(next);
+    const updatedBatch = next.find(b => b.id === batch.id);
+    if (updatedBatch) {
+      updateBatch(updatedBatch).catch(err => {
+        alert(err instanceof Error ? err.message : "Failed to discard batch");
+      });
+    }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (!window.confirm("Permanently delete this batch record?")) return;
-    persist(batches.filter((b) => b.id !== id));
+    setBatches(batches.filter((b) => b.id !== id));
+    try {
+      await deleteBatchCloud(id);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete batch");
+    }
   };
 
   if (!hydrated) {
@@ -1153,7 +1181,7 @@ function BatchCard({
               onChange={(e) => setSyncToBrooder(e.target.checked)}
             />
             <span className="text-sm text-on-surface">
-              Automatically add hatched chicks to inventory stock and create a Brooder lot
+              Automatically add hatched chicks to inventory stock and create an Active Flock lot
               <span className="block text-xs text-on-surface-variant mt-0.5">
                 (Uncheck this if you already manually recorded the day-old lot in FMS to avoid duplicates)
               </span>

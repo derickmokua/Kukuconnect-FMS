@@ -471,11 +471,11 @@ export function buildPerformanceInsights(
       area: "brooder",
       severity: rate != null && rate >= 5 ? "critical" : "warning",
       title: "Mortality / losses in the last 7 days",
-      finding: `Brooder deaths logged: ${snapshot.brooder.mortality7d}; inventory losses: ${snapshot.livestockLoss7d}.${
+      finding: `Flock deaths logged: ${snapshot.brooder.mortality7d}; inventory losses: ${snapshot.livestockLoss7d}.${
         rate != null ? ` Roughly ${rate}% of counted birds.` : ""
       }`,
       recommendation:
-        "Separate sick birds, check heat (brooder temp), drafts, overcrowding, and water. Review vaccine timing. High early mortality usually costs more in wasted feed than in the dead chicks alone.",
+        "Separate sick birds, check heat (flock temp), drafts, overcrowding, and water. Review vaccine timing. High early mortality usually costs more in wasted feed than in the dead chicks alone.",
       href: "/brooder",
       metric: `${dead} lost / 7d`,
     });
@@ -559,20 +559,20 @@ export function buildPerformanceInsights(
       title: `Hatch soon: ${b.name}`,
       finding: `Day ${b.day} of ${b.totalDays}.`,
       recommendation:
-        "Prepare brooder heat, feeders, drinkers, and boxes. Hatch without brooder ready spikes mortality and wastes the whole batch’s feed investment later.",
+        "Prepare flock heat, feeders, drinkers, and boxes. Hatch without flock area ready spikes mortality and wastes the whole batch’s feed investment later.",
       href: "/incubation",
     });
   }
 
   if (snapshot.brooder.needsAgeUp) {
     out.push({
-      id: "age-up",
+      id: "brooder_daily_age",
       area: "ops",
       severity: "info",
-      title: "Brooder daily age-up not run",
+      title: "Flock daily age-up not run",
       finding: `${snapshot.brooder.birds} birds in ${snapshot.brooder.activeLots} active lot(s).`,
       recommendation:
-        "Open Brooder and run the daily update so stock stages (and feed phase) match real age.",
+        "Open Active Flocks and run the daily update so stock stages (and feed phase) match real age.",
       href: "/brooder",
     });
   }

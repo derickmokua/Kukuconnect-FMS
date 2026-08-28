@@ -59,6 +59,8 @@ export const viewport: Viewport = {
   colorScheme: "light",
 };
 
+import OutboxSync from "@/components/OutboxSync";
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html
@@ -74,6 +76,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className={`${manrope.className} antialiased`}>
+        <OutboxSync />
         <AuthProvider>
           <RequireAuth>
             <AppShell>{children}</AppShell>

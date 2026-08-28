@@ -54,6 +54,7 @@ create table if not exists public.inventory_items (
   name text not null,
   category text not null check (category in ('livestock', 'eggs', 'other')),
   quantity integer not null default 0 check (quantity >= 0),
+  reserved_quantity integer not null default 0 check (reserved_quantity >= 0),
   unit text not null default 'units',
   low_stock_at integer not null default 0,
   default_price numeric(12, 2) not null default 0,
@@ -151,14 +152,23 @@ alter table public.incubation_batches enable row level security;
 create policy "auth all inventory_items" on public.inventory_items
   for all to authenticated using (true) with check (true);
 
-create policy "auth all inventory_movements" on public.inventory_movements
-  for all to authenticated using (true) with check (true);
+drop policy if exists "auth all inventory_movements" on public.inventory_movements;
+create policy "select inventory_movements" on public.inventory_movements
+  for select to authenticated using (true);
+create policy "insert inventory_movements" on public.inventory_movements
+  for insert to authenticated with check (true);
 
-create policy "auth all sales" on public.sales
-  for all to authenticated using (true) with check (true);
+drop policy if exists "auth all sales" on public.sales;
+create policy "select sales" on public.sales
+  for select to authenticated using (true);
+create policy "insert sales" on public.sales
+  for insert to authenticated with check (true);
 
-create policy "auth all sale_items" on public.sale_items
-  for all to authenticated using (true) with check (true);
+drop policy if exists "auth all sale_items" on public.sale_items;
+create policy "select sale_items" on public.sale_items
+  for select to authenticated using (true);
+create policy "insert sale_items" on public.sale_items
+  for insert to authenticated with check (true);
 
 create policy "auth all expenses" on public.expenses
   for all to authenticated using (true) with check (true);

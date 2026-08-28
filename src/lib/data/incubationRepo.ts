@@ -5,6 +5,8 @@ import {
 } from "@/lib/incubation";
 import { getSupabase } from "@/lib/supabase/client";
 import { getDataMode } from "./mode";
+import { getCache, setCache } from "./idbStore";
+import { enqueueMutation, isNetworkError } from "./outbox";
 
 type BatchRow = {
   id: string;
@@ -59,15 +61,25 @@ export async function listBatches(): Promise<IncubationBatch[]> {
   if (getDataMode() === "local") return localLoadBatches();
 
   const supabase = getSupabase();
-  if (!supabase) return localLoadBatches();
+  if (!supabase) throw new Error("Supabase client is not configured");
 
-  const { data, error } = await supabase
-    .from("incubation_batches")
-    .select("*")
-    .order("created_at", { ascending: false });
+  try {
+    const { data, error } = await supabase
+      .from("incubation_batches")
+      .select("*")
+      .order("created_at", { ascending: false });
 
-  if (error) throw new Error(error.message);
-  return (data as BatchRow[]).map(rowToBatch);
+    if (error) throw new Error(error.message);
+    const batches = (data as BatchRow[]).map(rowToBatch);
+    await setCache("incubation_batches", batches);
+    return batches;
+  } catch (err) {
+    if (isNetworkError(err)) {
+      const cached = await getCache("incubation_batches");
+      if (cached) return cached;
+    }
+    throw err;
+  }
 }
 
 export async function saveBatches(batches: IncubationBatch[]): Promise<void> {
@@ -78,23 +90,110 @@ export async function saveBatches(batches: IncubationBatch[]): Promise<void> {
 
   const supabase = getSupabase();
   if (!supabase) {
-    localSaveBatches(batches);
+    throw new Error("Supabase client is not configured");
+  }
+
+  await setCache("incubation_batches", batches);
+  const rows = batches.map(batchToRow);
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("incubation_batches").upsert(rows);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("incubation_batches", "UPSERT", rows);
+      return;
+    }
+    throw err;
+  }
+
+  // REMOVED: Bulk delete logic that destroyed cloud records missing from the local cache.
+}
+
+export async function insertBatch(batch: IncubationBatch): Promise<void> {
+  if (getDataMode() === "local") {
+    const all = localLoadBatches();
+    localSaveBatches([batch, ...all]);
     return;
   }
 
-  const rows = batches.map(batchToRow);
-  const { error } = await supabase.from("incubation_batches").upsert(rows);
-  if (error) throw new Error(error.message);
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new Error("Supabase client is not configured");
+  }
 
-  const ids = batches.map((b) => b.id);
-  const { data: existing } = await supabase
-    .from("incubation_batches")
-    .select("id");
-  const toDelete = (existing ?? [])
-    .map((r) => r.id as string)
-    .filter((id) => !ids.includes(id));
-  if (toDelete.length) {
-    await supabase.from("incubation_batches").delete().in("id", toDelete);
+  const row = batchToRow(batch);
+  const cached = await getCache("incubation_batches") || [];
+  await setCache("incubation_batches", [batch, ...cached]);
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("incubation_batches").insert(row);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("incubation_batches", "INSERT", row);
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function updateBatch(batch: IncubationBatch): Promise<void> {
+  if (getDataMode() === "local") {
+    const all = localLoadBatches().map(b => b.id === batch.id ? batch : b);
+    localSaveBatches(all);
+    return;
+  }
+
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new Error("Supabase client is not configured");
+  }
+
+  const row = batchToRow(batch);
+  const cached = (await getCache("incubation_batches") || []) as IncubationBatch[];
+  await setCache("incubation_batches", cached.map(b => b.id === batch.id ? batch : b));
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("incubation_batches").update(row).eq("id", batch.id);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("incubation_batches", "UPDATE", row);
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function deleteBatchCloud(id: string): Promise<void> {
+  if (getDataMode() === "local") {
+    const all = localLoadBatches().filter(b => b.id !== id);
+    localSaveBatches(all);
+    return;
+  }
+  
+  const supabase = getSupabase();
+  if (!supabase) {
+    throw new Error("Supabase client is not configured");
+  }
+  
+  const cached = (await getCache("incubation_batches") || []) as IncubationBatch[];
+  await setCache("incubation_batches", cached.filter(b => b.id !== id));
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("incubation_batches").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("incubation_batches", "DELETE", { id });
+      return;
+    }
+    throw err;
   }
 }
 

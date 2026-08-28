@@ -14,7 +14,7 @@ import {
   ORDER_PRODUCTS,
   statusLabel,
 } from "@/lib/orders";
-import { listOrders, insertOrder, updateOrder } from "@/lib/data/ordersRepo";
+import { listOrdersPaginated, insertOrder, updateOrder, getOrderCounts } from "@/lib/data/ordersRepo";
 import {
   listItems,
   listMovements,
@@ -61,45 +61,40 @@ export default function AdminOrdersPage() {
   const [mProductId, setMProductId] = useState(ORDER_PRODUCTS[0].id);
   const [mQty, setMQty] = useState(50);
 
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [totalCount, setTotalCount] = useState(0);
+
+  const [counts, setCounts] = useState<Record<string, number>>({
+    pending: 0,
+    paid: 0,
+    fulfilled: 0,
+    cancelled: 0,
+  });
+
   const reload = useCallback(async () => {
-    setOrders(await listOrders());
-  }, []);
+    try {
+      const [countsRes, ordersRes] = await Promise.all([
+        getOrderCounts(),
+        listOrdersPaginated(page, pageSize, searchQuery, filter)
+      ]);
+      setCounts(countsRes);
+      setOrders(ordersRes.data);
+      setTotalCount(ordersRes.count);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to load orders");
+    } finally {
+      setHydrated(true);
+    }
+  }, [page, pageSize, searchQuery, filter]);
 
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const next = await listOrders();
-        if (!cancelled) setOrders(next);
-      } catch (err) {
-        alert(err instanceof Error ? err.message : "Failed to load orders");
-      } finally {
-        if (!cancelled) setHydrated(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const filtered = useMemo(() => {
-    const list =
-      filter === "all" ? orders : orders.filter((o) => o.status === filter);
-    return [...list].sort(
-      (a, b) =>
-        new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
-    );
-  }, [orders, filter]);
-
-  const counts = useMemo(
-    () => ({
-      pending: orders.filter((o) => o.status === "pending").length,
-      paid: orders.filter((o) => o.status === "paid").length,
-      fulfilled: orders.filter((o) => o.status === "fulfilled").length,
-      cancelled: orders.filter((o) => o.status === "cancelled").length,
-    }),
-    [orders]
-  );
+    let timeout = setTimeout(() => {
+      reload();
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [reload]);
 
   const confirmPaid = async (order: FarmerOrder) => {
     if (order.status !== "pending") return;
@@ -112,33 +107,6 @@ export default function AdminOrdersPage() {
       return;
     setBusyId(order.id);
     try {
-      const byItem = new Map<string, number>();
-      for (const line of order.items) {
-        byItem.set(line.itemId, (byItem.get(line.itemId) ?? 0) + line.qty);
-      }
-      const items = await listItems();
-      const movements = await listMovements();
-      const result = deductForSale(
-        items,
-        movements,
-        Array.from(byItem.entries()).map(([itemId, qty]) => ({ itemId, qty })),
-        order.id
-      );
-      if (!result.ok) {
-        alert(result.error ?? "Not enough stock");
-        return;
-      }
-      await saveItems(result.items);
-      await saveMovements(result.movements);
-
-      // Deduct sold chicks from active brooder lots
-      const activeLots = await listLots();
-      const nextLots = deductBrooderLotsForSale(
-        activeLots,
-        Array.from(byItem.entries()).map(([itemId, qty]) => ({ itemId, qty }))
-      );
-      await saveLots(nextLots);
-
       const sale = createSale({
         id: `sale-from-${order.id}`,
         customer: order.customerName,
@@ -152,8 +120,20 @@ export default function AdminOrdersPage() {
         total: order.total,
         paymentMethod: "M-Pesa",
         mpesaCode: ref,
+        servedBy: "Admin",
       });
-      await saveSales(addSale(await listSales(), sale));
+
+      const { buildRecordSalePayload, payOrderTransaction } = await import('@/lib/data/transactions');
+      
+      const cart = order.items.map(i => ({
+        itemId: i.itemId,
+        name: i.name,
+        qty: i.qty,
+        price: i.unitPrice
+      }));
+      
+      const salePayload = await buildRecordSalePayload(sale, cart);
+      await payOrderTransaction(order.id, ref, salePayload);
 
       const paid = markPaid(order, ref);
       await updateOrder(paid);
@@ -197,6 +177,10 @@ export default function AdminOrdersPage() {
     }
     setBusyId(order.id);
     try {
+      if (order.status === "pending") {
+        const { cancelOrderTransaction } = await import('@/lib/data/transactions');
+        await cancelOrderTransaction(order.id);
+      }
       const cancelled = markCancelled(order);
       await updateOrder(cancelled);
       await reload();
@@ -278,7 +262,7 @@ export default function AdminOrdersPage() {
           <button
             key={key}
             type="button"
-            onClick={() => setFilter(key)}
+            onClick={() => { setFilter(key as Filter); setPage(1); }}
             className="text-left"
           >
             <Card
@@ -302,17 +286,26 @@ export default function AdminOrdersPage() {
         ))}
       </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant={filter === "all" ? "primary" : "secondary"}
-          onClick={() => setFilter("all")}
-        >
-          All ({orders.length})
-        </Button>
-        {notifyLog && (
-          <p className="text-xs text-tertiary-container sm:ml-2">{notifyLog}</p>
-        )}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={filter === "all" ? "primary" : "secondary"}
+            onClick={() => { setFilter("all"); setPage(1); }}
+          >
+            All
+          </Button>
+          {notifyLog && (
+            <p className="text-xs text-tertiary-container sm:ml-2">{notifyLog}</p>
+          )}
+        </div>
+        <div>
+          <Input
+            placeholder="Search orders..."
+            value={searchQuery}
+            onChange={(e) => { setSearchQuery(e.target.value); setPage(1); }}
+          />
+        </div>
       </div>
 
       {showManual && (
@@ -372,7 +365,7 @@ export default function AdminOrdersPage() {
         </Card>
       )}
 
-      {filtered.length === 0 ? (
+      {orders.length === 0 ? (
         <EmptyState icon="shopping_bag" title="No orders here">
           Share{" "}
           <Link href="/order" className="text-primary font-medium">
@@ -382,7 +375,7 @@ export default function AdminOrdersPage() {
         </EmptyState>
       ) : (
         <div className="space-y-3">
-          {filtered.map((order) => (
+          {orders.map((order) => (
             <Card key={order.id}>
               <CardBody className="space-y-3">
                 <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
@@ -484,6 +477,27 @@ export default function AdminOrdersPage() {
               </CardBody>
             </Card>
           ))}
+          {totalCount > pageSize && (
+            <div className="flex justify-between items-center py-4">
+              <button
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                disabled={page === 1}
+                className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <span className="text-sm text-on-surface-variant">
+                Page {page} of {Math.ceil(totalCount / pageSize)} ({totalCount} total)
+              </span>
+              <button
+                onClick={() => setPage((p) => p + 1)}
+                disabled={page >= Math.ceil(totalCount / pageSize)}
+                className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

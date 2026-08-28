@@ -19,58 +19,46 @@ import {
   todayIsoDate,
 } from "@/lib/expenses";
 import { formatMonthLabel, monthKeyFromDate } from "@/lib/sales";
-import { listExpenses, saveExpenses } from "@/lib/data/expensesRepo";
+import { listExpensesPaginated, insertExpense, deleteExpenseCloud } from "@/lib/data/expensesRepo";
 
 export default function ExpensesPage() {
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [hydrated, setHydrated] = useState(false);
-  const [monthFilter, setMonthFilter] = useState(monthKeyFromDate());
   const [showForm, setShowForm] = useState(false);
+  
+  const [page, setPage] = useState(1);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [totalCount, setTotalCount] = useState(0);
+  const pageSize = 20;
 
   const [date, setDate] = useState(todayIsoDate());
   const [category, setCategory] = useState<ExpenseCategory>("feed");
   const [amount, setAmount] = useState(0);
   const [description, setDescription] = useState("");
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const next = await listExpenses();
-        if (!cancelled) setExpenses(next);
-      } catch (err) {
-        alert(err instanceof Error ? err.message : "Failed to load expenses");
-      } finally {
-        if (!cancelled) setHydrated(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const persist = useCallback(async (next: Expense[]) => {
-    setExpenses(next);
+  const loadData = useCallback(async () => {
     try {
-      await saveExpenses(next);
+      const { data, count } = await listExpensesPaginated(page, pageSize, searchQuery);
+      setExpenses(data);
+      setTotalCount(count);
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to save expenses");
+      alert(err instanceof Error ? err.message : "Failed to load expenses");
+    } finally {
+      setHydrated(true);
     }
-  }, []);
+  }, [page, pageSize, searchQuery]);
 
-  const months = useMemo(() => availableExpenseMonths(expenses), [expenses]);
-  const filtered = useMemo(
-    () =>
-      filterExpensesByMonth(expenses, monthFilter).sort((a, b) =>
-        b.date.localeCompare(a.date)
-      ),
-    [expenses, monthFilter]
-  );
-  const monthTotal = useMemo(() => sumExpenses(filtered), [filtered]);
-  const allTime = useMemo(() => sumExpenses(expenses), [expenses]);
-  const byCategory = useMemo(() => expensesByCategory(filtered), [filtered]);
+  useEffect(() => {
+    let timeout = setTimeout(() => {
+      loadData();
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [loadData]);
 
-  const handleAdd = (e: React.FormEvent) => {
+  const pageTotal = useMemo(() => sumExpenses(expenses), [expenses]);
+  const byCategory = useMemo(() => expensesByCategory(expenses), [expenses]);
+
+  const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (amount <= 0) {
       alert("Enter an amount greater than zero.");
@@ -78,19 +66,30 @@ export default function ExpensesPage() {
     }
     const expense = createExpense({ date, category, amount, description });
     const next = addExpense(expenses, expense);
-    persist(next);
+    setExpenses(next);
+    try {
+      await insertExpense(expense);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to save expense");
+    }
     setAmount(0);
     setDescription("");
     setDate(todayIsoDate());
     setShowForm(false);
-    setMonthFilter(expense.date.slice(0, 7));
+    loadData();
   };
 
-  const handleDelete = (expense: Expense) => {
+  const handleDelete = async (expense: Expense) => {
     if (!window.confirm(`Delete expense of KSh ${expense.amount.toLocaleString()}?`)) {
       return;
     }
-    persist(deleteExpense(expenses, expense.id));
+    const next = deleteExpense(expenses, expense.id);
+    setExpenses(next);
+    try {
+      await deleteExpenseCloud(expense.id);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete expense");
+    }
   };
 
   if (!hydrated) {
@@ -122,38 +121,29 @@ export default function ExpensesPage() {
         </button>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="farm-card p-5 rounded-3xl border border-outline-variant">
-          <p className="text-sm text-error font-medium">
-            {formatMonthLabel(monthFilter)}
-          </p>
+          <p className="text-sm text-error font-medium">Page Total</p>
           <p className="text-2xl font-bold text-on-surface mt-2">
-            KSh {monthTotal.toLocaleString()}
+            KSh {pageTotal.toLocaleString()}
           </p>
           <p className="text-xs text-on-surface-variant mt-1">
-            {filtered.length} expense{filtered.length === 1 ? "" : "s"}
-          </p>
-        </div>
-        <div className="farm-card p-5 rounded-3xl border border-outline-variant">
-          <p className="text-sm text-secondary font-medium">All time</p>
-          <p className="text-2xl font-bold text-on-surface mt-2">
-            KSh {allTime.toLocaleString()}
+            {expenses.length} expense{expenses.length === 1 ? "" : "s"}
           </p>
         </div>
         <div className="farm-card p-5 rounded-3xl border border-outline-variant">
           <label className="block space-y-2">
-            <span className="text-sm text-on-surface-variant">Month</span>
-            <select
+            <span className="text-sm text-on-surface-variant">Search Expenses</span>
+            <input
+              type="text"
+              placeholder="Search by description or category..."
               className="w-full bg-surface-container-highest p-3 rounded-2xl text-on-surface"
-              value={monthFilter}
-              onChange={(e) => setMonthFilter(e.target.value)}
-            >
-              {months.map((m) => (
-                <option key={m} value={m}>
-                  {formatMonthLabel(m)}
-                </option>
-              ))}
-            </select>
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setPage(1); // Reset to page 1 on search
+              }}
+            />
           </label>
         </div>
       </div>
@@ -161,7 +151,7 @@ export default function ExpensesPage() {
       {byCategory.length > 0 && (
         <div className="farm-card rounded-3xl p-5 border border-outline-variant">
           <h3 className="text-sm font-medium text-on-surface-variant mb-3">
-            By category ({formatMonthLabel(monthFilter)})
+            By category (this page)
           </h3>
           <div className="flex flex-wrap gap-2">
             {byCategory.map((row) => (
@@ -238,14 +228,13 @@ export default function ExpensesPage() {
         </form>
       )}
 
-      {filtered.length === 0 ? (
+      {expenses.length === 0 ? (
         <div className="farm-card rounded-3xl p-12 text-center text-on-surface-variant border border-outline-variant">
-          No expenses for {formatMonthLabel(monthFilter)}. Add feed, meds, or other
-          costs to track profit.
+          No expenses found.
         </div>
       ) : (
         <div className="space-y-3">
-          {filtered.map((expense) => (
+          {expenses.map((expense) => (
             <article
               key={expense.id}
               className="farm-card rounded-3xl p-5 border border-outline-variant flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3"
@@ -280,10 +269,27 @@ export default function ExpensesPage() {
         </div>
       )}
 
-      <p className="text-center text-xs text-on-surface-variant">
-        This month total used on the dashboard: KSh{" "}
-        {getMonthExpenses(expenses, monthKeyFromDate()).toLocaleString()}
-      </p>
+      {totalCount > pageSize && (
+        <div className="flex justify-between items-center py-4">
+          <button
+            onClick={() => setPage(p => Math.max(1, p - 1))}
+            disabled={page === 1}
+            className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+          >
+            Previous
+          </button>
+          <span className="text-sm text-on-surface-variant">
+            Page {page} of {Math.ceil(totalCount / pageSize)} ({totalCount} total)
+          </span>
+          <button
+            onClick={() => setPage(p => p + 1)}
+            disabled={page >= Math.ceil(totalCount / pageSize)}
+            className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+          >
+            Next
+          </button>
+        </div>
+      )}
     </div>
   );
 }

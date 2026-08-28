@@ -19,10 +19,11 @@ import {
 } from "@/lib/inventory";
 import {
   listItems,
-  listMovements,
+  listMovementsPaginated,
   saveItems,
   saveMovements,
 } from "@/lib/data/inventoryRepo";
+import { adjustInventoryTransaction } from "@/lib/data/transactions";
 
 type Tab = "stock" | "history";
 
@@ -51,20 +52,31 @@ export default function InventoryPage() {
   const [editPrice, setEditPrice] = useState(0);
   const [editLow, setEditLow] = useState(0);
 
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [totalCount, setTotalCount] = useState(0);
+
+  const loadMovements = useCallback(async () => {
+    try {
+      const res = await listMovementsPaginated(page, pageSize, searchQuery);
+      setMovements(res.data);
+      setTotalCount(res.count);
+    } catch (err) {
+      console.error(err);
+    }
+  }, [page, pageSize, searchQuery]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [nextItems, nextMovements] = await Promise.all([
-          listItems(),
-          listMovements(),
-        ]);
+        const nextItems = await listItems();
         if (cancelled) return;
         setItems(nextItems);
-        setMovements(nextMovements);
       } catch (err) {
         console.error(err);
-        alert(err instanceof Error ? err.message : "Failed to load inventory");
+        alert(err instanceof Error ? err.message : "Failed to load inventory items");
       } finally {
         if (!cancelled) setHydrated(true);
       }
@@ -73,6 +85,15 @@ export default function InventoryPage() {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let timeout = setTimeout(() => {
+      if (tab === "history") {
+        loadMovements();
+      }
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [loadMovements, tab]);
 
   const persist = useCallback(
     async (nextItems: InventoryItem[], nextMovements?: StockMovement[]) => {
@@ -115,7 +136,7 @@ export default function InventoryPage() {
     setEditId(null);
   };
 
-  const confirmAdjust = () => {
+  const confirmAdjust = async () => {
     if (!adjustId) return;
     const qty = Math.floor(adjustQty);
     if (qty < 0 || (adjustMode !== "set" && qty === 0)) {
@@ -123,38 +144,46 @@ export default function InventoryPage() {
       return;
     }
 
-    let result;
+    const item = items.find(i => i.id === adjustId);
+    if (!item) return;
+
+    let delta = 0;
+    let type: MovementType = "adjust";
+    let note = adjustNote;
+
     if (adjustMode === "set") {
-      result = setAbsoluteQuantity(items, movements, adjustId, qty, adjustNote || undefined);
+      delta = qty - item.quantity;
+      if (delta === 0) {
+        setAdjustId(null);
+        return;
+      }
+      note = note || `Set quantity to ${qty}`;
+      type = "adjust";
     } else if (adjustMode === "in") {
-      result = applyStockChange(items, movements, {
-        itemId: adjustId,
-        delta: qty,
-        type: "in",
-        note: adjustNote || "Stock received",
-      });
+      delta = qty;
+      note = note || "Stock received";
+      type = "in";
     } else if (adjustMode === "out") {
-      result = applyStockChange(items, movements, {
-        itemId: adjustId,
-        delta: -qty,
-        type: "out",
-        note: adjustNote || "Stock removed",
-      });
+      delta = -qty;
+      note = note || "Stock removed";
+      type = "out";
     } else {
-      result = applyStockChange(items, movements, {
-        itemId: adjustId,
-        delta: -qty,
-        type: "loss",
-        note: adjustNote || "Loss / mortality",
-      });
+      delta = -qty;
+      note = note || "Loss / mortality";
+      type = "loss";
     }
 
-    if (!result.ok) {
-      alert(result.error ?? "Could not update stock");
-      return;
+    try {
+      await adjustInventoryTransaction(adjustId, delta, type, note, undefined, adjustMode === "set");
+      const nextItems = await listItems();
+      setItems(nextItems);
+      if (tab === "history") {
+        loadMovements();
+      }
+      setAdjustId(null);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Could not update stock");
     }
-    persist(result.items, result.movements);
-    setAdjustId(null);
   };
 
   const openEdit = (item: InventoryItem) => {
@@ -386,7 +415,7 @@ export default function InventoryPage() {
             </button>
           ))}
         </div>
-        {tab === "stock" && (
+        {tab === "stock" ? (
           <div className="flex flex-wrap gap-2">
             {(
               [
@@ -409,6 +438,19 @@ export default function InventoryPage() {
                 {label}
               </button>
             ))}
+          </div>
+        ) : (
+          <div className="w-full sm:w-auto">
+            <input
+              type="text"
+              placeholder="Search movements..."
+              className="bg-surface-container-highest p-2 rounded-xl text-sm text-on-surface"
+              value={searchQuery}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                setPage(1);
+              }}
+            />
           </div>
         )}
       </div>
@@ -601,7 +643,7 @@ export default function InventoryPage() {
             </p>
           ) : (
             <div className="divide-y divide-outline-variant">
-              {movements.slice(0, 100).map((m) => (
+              {movements.map((m) => (
                 <div
                   key={m.id}
                   className="px-5 py-4 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2"
@@ -629,6 +671,27 @@ export default function InventoryPage() {
                   </div>
                 </div>
               ))}
+              {totalCount > pageSize && (
+                <div className="flex justify-between items-center p-4">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-sm text-on-surface-variant">
+                    Page {page} of {Math.ceil(totalCount / pageSize)} ({totalCount} total)
+                  </span>
+                  <button
+                    onClick={() => setPage((p) => p + 1)}
+                    disabled={page >= Math.ceil(totalCount / pageSize)}
+                    className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

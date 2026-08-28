@@ -5,7 +5,7 @@ export const ORDERS_STORAGE_KEY = "kukuconnect-farmer-orders";
 
 export type OrderStatus = "pending" | "paid" | "fulfilled" | "cancelled";
 export type Breed = "kuroiler" | "rainbow_rooster";
-export type ChickAge = "day_old" | "week_1" | "week_2" | "week_3" | "week_4";
+export type ChickAge = "day_old" | "week_1" | "week_2" | "week_3" | "week_4" | "mature" | "egg";
 export type OrderSource = "web" | "admin" | "whatsapp" | "phone";
 
 export interface OrderLine {
@@ -41,6 +41,7 @@ export interface OrderProduct {
   name: string;
   unitPrice: number;
   blurb: string;
+  imageUrl?: string;
 }
 
 /**
@@ -57,6 +58,7 @@ export const ORDER_PRODUCTS: OrderProduct[] = [
     name: "Day-old Chicks",
     unitPrice: 110,
     blurb: "Freshly hatched · requires brooder heat & care",
+    imageUrl: "/images/day_old_chicks.jpg",
   },
   {
     id: "1-week-chicks",
@@ -66,6 +68,7 @@ export const ORDER_PRODUCTS: OrderProduct[] = [
     name: "1-week-old Chicks",
     unitPrice: 130,
     blurb: "Active and alert · starter feed",
+    imageUrl: "/images/one_week_chicks.jpg",
   },
   {
     id: "2-weeks-chicks",
@@ -75,6 +78,7 @@ export const ORDER_PRODUCTS: OrderProduct[] = [
     name: "2-weeks-old Chicks",
     unitPrice: 160,
     blurb: "Strong immunity · past high early risk",
+    imageUrl: "/images/two_week_chicks.jpg",
   },
   {
     id: "3-weeks-chicks",
@@ -84,6 +88,7 @@ export const ORDER_PRODUCTS: OrderProduct[] = [
     name: "3-weeks-old Chicks",
     unitPrice: 190,
     blurb: "Feathering well · Newcastle vaccinated",
+    imageUrl: "/images/three_week_chicks.jpg",
   },
   {
     id: "4-weeks-chicks",
@@ -93,6 +98,47 @@ export const ORDER_PRODUCTS: OrderProduct[] = [
     name: "4-weeks-old (1 Month) Chicks",
     unitPrice: 250,
     blurb: "Hardened · ready for the outside coop",
+    imageUrl: "/images/four_week_chicks.jpg",
+  },
+  {
+    id: "mature-hen",
+    breed: "kuroiler",
+    age: "mature",
+    itemId: ITEM_IDS.meatBird,
+    name: "Mature Hen",
+    unitPrice: 1200,
+    blurb: "Healthy mature hen · ready for table or laying",
+    imageUrl: "/images/mature_hen.jpg",
+  },
+  {
+    id: "mature-cock",
+    breed: "kuroiler",
+    age: "mature",
+    itemId: ITEM_IDS.meatBird,
+    name: "Mature Cock",
+    unitPrice: 1800,
+    blurb: "Proud, vibrant mature rooster",
+    imageUrl: "/images/mature_cock.jpg",
+  },
+  {
+    id: "table-eggs",
+    breed: "kuroiler",
+    age: "egg",
+    itemId: ITEM_IDS.trayEggs,
+    name: "Table Eggs",
+    unitPrice: 450,
+    blurb: "Fresh farm eggs · Per tray of 30",
+    imageUrl: "/images/table_eggs.jpg",
+  },
+  {
+    id: "incubation-eggs",
+    breed: "kuroiler",
+    age: "egg",
+    itemId: ITEM_IDS.hatchingEggs,
+    name: "Incubation Eggs",
+    unitPrice: 1000,
+    blurb: "High quality hatching eggs · Per tray of 30",
+    imageUrl: "/images/incubation_eggs.jpg",
   },
 ];
 
@@ -107,6 +153,8 @@ export function ageLabel(age: ChickAge): string {
     week_2: "2 weeks",
     week_3: "3 weeks",
     week_4: "4 weeks (1 month)",
+    mature: "Mature",
+    egg: "Egg",
   };
   return labels[age];
 }

@@ -10,6 +10,8 @@ import {
 } from "@/lib/brooder";
 import { getSupabase } from "@/lib/supabase/client";
 import { getDataMode } from "./mode";
+import { getCache, setCache } from "./idbStore";
+import { enqueueMutation, isNetworkError } from "./outbox";
 
 function isMissingTableError(message?: string): boolean {
   const m = (message || "").toLowerCase();
@@ -24,72 +26,160 @@ function isMissingTableError(message?: string): boolean {
 export async function listLots(): Promise<BrooderLot[]> {
   if (getDataMode() === "local") return normalizeLots(loadLotsLocal());
   const supabase = getSupabase();
-  if (!supabase) return normalizeLots(loadLotsLocal());
+  if (!supabase) throw new Error("Supabase client is not configured");
+  
   try {
     const { data, error } = await supabase
       .from("brooder_lots")
       .select("*")
       .order("created_at", { ascending: false });
-    if (error) {
-      if (isMissingTableError(error.message)) {
-        console.warn(
-          "[brooder] brooder_lots missing — run supabase/brooder.sql. Using local data."
-        );
-      }
-      return normalizeLots(loadLotsLocal());
+      
+    if (error) throw new Error(error.message);
+    if (!data) return [];
+    const lots = normalizeLots(data.map(rowToLot));
+    await setCache("brooder_lots", lots);
+    return lots;
+  } catch (err) {
+    if (isNetworkError(err)) {
+      const cached = await getCache("brooder_lots");
+      if (cached) return cached;
     }
-    if (!data) return normalizeLots(loadLotsLocal());
-    return normalizeLots(data.map(rowToLot));
-  } catch {
-    return normalizeLots(loadLotsLocal());
+    throw err;
   }
 }
 
 export async function saveLots(lots: BrooderLot[]): Promise<void> {
   const normalized = normalizeLots(lots);
-  saveLotsLocal(normalized);
-  if (getDataMode() !== "cloud") return;
+  if (getDataMode() === "local") {
+    saveLotsLocal(normalized);
+    return;
+  }
+  
   const supabase = getSupabase();
-  if (!supabase) return;
-  try {
-    const rows = normalized.map(lotToRow);
-    const { error } = await supabase.from("brooder_lots").upsert(rows);
-    if (error && isMissingTableError(error.message)) {
-      console.warn(
-        "[brooder] Cannot sync lots — run supabase/brooder.sql in Supabase SQL Editor."
-      );
+  if (!supabase) throw new Error("Supabase client is not configured");
+  
+  const { data: existing } = await supabase
+    .from("brooder_lots")
+    .select("id, quantity, total_mortality, total_sales, total_discounted");
+    
+  const existingMap = new Map((existing ?? []).map((e) => [e.id as string, e]));
+
+  const rows = normalized.map((lot) => {
+    const row = lotToRow(lot);
+    const ex = existingMap.get(lot.id);
+    if (ex) {
+      row.quantity = Number(ex.quantity);
+      row.total_mortality = Number(ex.total_mortality);
+      row.total_sales = Number(ex.total_sales);
+      row.total_discounted = Number(ex.total_discounted);
     }
-  } catch {
-    /* optional cloud */
+    return row;
+  });
+
+  await setCache("brooder_lots", normalized);
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("brooder_lots").upsert(rows);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("brooder_lots", "UPSERT", rows);
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function upsertLotCloud(lot: BrooderLot): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("Supabase client is not configured");
+  const cached = (await getCache("brooder_lots") || []) as BrooderLot[];
+  const existingIndex = cached.findIndex(l => l.id === lot.id);
+  if (existingIndex >= 0) {
+    cached[existingIndex] = lot;
+  } else {
+    cached.unshift(lot);
+  }
+  await setCache("brooder_lots", cached);
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("brooder_lots").upsert(lotToRow(lot));
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("brooder_lots", "UPSERT", lotToRow(lot));
+      return;
+    }
+    throw err;
+  }
+}
+
+export async function deleteLotCloud(id: string): Promise<void> {
+  const supabase = getSupabase();
+  if (!supabase) throw new Error("Supabase client is not configured");
+  const cached = (await getCache("brooder_lots") || []) as BrooderLot[];
+  await setCache("brooder_lots", cached.filter(l => l.id !== id));
+
+  try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("brooder_lots").delete().eq("id", id);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("brooder_lots", "DELETE", { id });
+      return;
+    }
+    throw err;
   }
 }
 
 export async function listMortality(): Promise<MortalityEvent[]> {
   if (getDataMode() === "local") return loadMortalityLocal();
   const supabase = getSupabase();
-  if (!supabase) return loadMortalityLocal();
+  if (!supabase) throw new Error("Supabase client is not configured");
+  
   try {
     const { data, error } = await supabase
       .from("mortality_events")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(500);
-    if (error || !data) return loadMortalityLocal();
-    return data.map(rowToMort);
-  } catch {
-    return loadMortalityLocal();
+      
+    if (error) throw new Error(error.message);
+    if (!data) return [];
+    const events = data.map(rowToMort);
+    await setCache("mortality_events", events);
+    return events;
+  } catch (err) {
+    if (isNetworkError(err)) {
+      const cached = await getCache("mortality_events");
+      if (cached) return cached;
+    }
+    throw err;
   }
 }
 
 export async function saveMortality(events: MortalityEvent[]): Promise<void> {
-  saveMortalityLocal(events);
-  if (getDataMode() !== "cloud") return;
+  if (getDataMode() === "local") {
+    saveMortalityLocal(events);
+    return;
+  }
   const supabase = getSupabase();
-  if (!supabase) return;
+  if (!supabase) throw new Error("Supabase client is not configured");
+  
+  await setCache("mortality_events", events);
   try {
-    await supabase.from("mortality_events").upsert(events.map(mortToRow));
-  } catch {
-    /* optional */
+    if (typeof navigator !== 'undefined' && !navigator.onLine) throw new Error("Failed to fetch");
+    const { error } = await supabase.from("mortality_events").upsert(events.map(mortToRow));
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    if (isNetworkError(err)) {
+      await enqueueMutation("mortality_events", "UPSERT", events.map(mortToRow));
+      return;
+    }
+    throw err;
   }
 }
 

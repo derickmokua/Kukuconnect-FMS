@@ -1,6 +1,6 @@
 /**
- * Single-page branded KukuConnect sales receipt (classic printed till slip).
- * White background, monospace type, centered logo, dashed accent rules.
+ * Single/multi-page branded KukuConnect sales receipt.
+ * White background, clean Helvetica type — WinAnsi-safe for reliable printing.
  */
 import { PDFDocument, type PDFFont, type PDFPage, type RGB } from "pdf-lib";
 import {
@@ -14,6 +14,7 @@ import {
   formatKSh,
   loadPublicLogoBytes,
   loadReceiptFonts,
+  pdfSafeText,
   type BrandFonts,
 } from "./brand";
 import type { Sale } from "./sales";
@@ -37,6 +38,10 @@ export interface ReceiptInput {
   logoBytes?: ArrayBuffer | Uint8Array | null;
 }
 
+const MARGIN = 48;
+const LOGO_SIZE = 72;
+const FOOTER_RESERVE = 72;
+
 export async function generateReceipt(data: ReceiptInput): Promise<Uint8Array> {
   const {
     receiptNumber,
@@ -51,15 +56,12 @@ export async function generateReceipt(data: ReceiptInput): Promise<Uint8Array> {
     logoBytes = null,
   } = data;
 
-  if (!PAYMENT_METHODS.includes(paymentMethod as PaymentMethod)) {
-    throw new Error(
-      `paymentMethod must be one of: ${PAYMENT_METHODS.join(", ")}`
-    );
-  }
+  const method = normalizePayment(paymentMethod);
 
   const pdfDoc = await PDFDocument.create();
-  pdfDoc.setTitle(`KukuConnect Receipt ${receiptNumber}`);
+  pdfDoc.setTitle(pdfSafeText(`KukuConnect Receipt ${receiptNumber}`));
   pdfDoc.setProducer("KukuConnect");
+  pdfDoc.setCreator("KukuConnect FMS");
 
   const fonts = await loadReceiptFonts(pdfDoc);
 
@@ -68,117 +70,122 @@ export async function generateReceipt(data: ReceiptInput): Promise<Uint8Array> {
     logoImage = await embedLogo(pdfDoc, logoBytes);
   }
 
-  const page = pdfDoc.addPage([PAGE.width, PAGE.height]);
-  const { width } = page.getSize();
-  const centerX = width / 2;
+  const lines = items.map((item) => ({
+    description: pdfSafeText(item.description || "Item"),
+    qty: Math.max(0, Number(item.qty) || 0),
+    unitPrice: Math.max(0, Number(item.unitPrice) || 0),
+    lineTotal: Math.max(0, (Number(item.qty) || 0) * (Number(item.unitPrice) || 0)),
+  }));
+  const subtotal = lines.reduce((s, it) => s + it.lineTotal, 0);
 
-  // Plain white background (default) — no solid header band
-  let y = PAGE.height - 56;
+  let page = pdfDoc.addPage([PAGE.width, PAGE.height]);
+  let y = PAGE.height - MARGIN;
 
-  // Centered logo
+  const ensureSpace = (need: number) => {
+    if (y - need < FOOTER_RESERVE) {
+      drawPageFooter(page, fonts);
+      page = pdfDoc.addPage([PAGE.width, PAGE.height]);
+      y = PAGE.height - MARGIN;
+      y = drawContinuedHeader(page, fonts, y, receiptNumber);
+    }
+  };
+
+  // ---- Header ----
   if (logoImage) {
-    const logoSize = 130;
+    const dims = logoImage.scale(1);
+    const scale = Math.min(LOGO_SIZE / dims.width, LOGO_SIZE / dims.height, 1);
+    const w = dims.width * scale;
+    const h = dims.height * scale;
     page.drawImage(logoImage, {
-      x: centerX - logoSize / 2,
-      y: y - logoSize,
-      width: logoSize,
-      height: logoSize,
+      x: PAGE.width / 2 - w / 2,
+      y: y - h,
+      width: w,
+      height: h,
     });
-    y -= logoSize + 14;
+    y -= h + 12;
   } else {
-    // Text wordmark fallback if logo missing
     drawCentered(page, "KukuConnect", {
       y,
-      size: 16,
+      size: 18,
       font: fonts.bold,
       color: COLORS.charcoal,
     });
-    y -= 22;
+    y -= 24;
   }
 
-  drawDashedRule(page, y, width, COLORS.yellow, 90);
-  y -= 22;
+  drawDashedRule(page, y, PAGE.width, COLORS.yellow, MARGIN);
+  y -= 20;
 
   drawCentered(page, "RECEIPT", {
     y,
-    size: 13,
+    size: 14,
     font: fonts.bold,
     color: COLORS.charcoal,
-    tracking: 3,
   });
-  y -= 18;
+  y -= 22;
 
-  const metaLeftX = 90;
-  const metaRightX = width - 90;
-
-  y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Receipt #", receiptNumber || "—");
-  if (refNumber) {
-    y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Ref #", refNumber);
-  }
-  const dateStr = new Date(date).toLocaleDateString("en-KE", {
+  const leftX = MARGIN;
+  const rightX = PAGE.width - MARGIN;
+  const dateObj = safeDate(date);
+  const dateStr = dateObj.toLocaleDateString("en-KE", {
     year: "numeric",
     month: "short",
     day: "numeric",
   });
-  y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Date", dateStr);
-  y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Served by", servedBy || "—");
-  y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Customer", customerName);
+
+  y = drawKV(page, fonts, y, leftX, rightX, "Receipt #", pdfSafeText(receiptNumber || "-"));
+  if (refNumber) {
+    y = drawKV(page, fonts, y, leftX, rightX, "Ref #", pdfSafeText(refNumber));
+  }
+  y = drawKV(page, fonts, y, leftX, rightX, "Date", pdfSafeText(dateStr));
+  y = drawKV(page, fonts, y, leftX, rightX, "Served by", pdfSafeText(servedBy || "-"));
+  y = drawKV(page, fonts, y, leftX, rightX, "Customer", pdfSafeText(customerName || "Walk-in Customer"));
   if (customerPhone) {
-    y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Phone", customerPhone);
+    y = drawKV(page, fonts, y, leftX, rightX, "Phone", pdfSafeText(customerPhone));
   }
 
   const paymentValue =
-    paymentMethod === "M-Pesa" && mpesaCode
-      ? `M-Pesa (${mpesaCode})`
-      : String(paymentMethod);
-  y = drawKV(page, fonts, y, metaLeftX, metaRightX, "Payment", paymentValue, {
-    valueColor: paymentMethod === "M-Pesa" ? COLORS.green : COLORS.charcoal,
+    method === "M-Pesa" && mpesaCode
+      ? `M-Pesa (${pdfSafeText(mpesaCode)})`
+      : method;
+  y = drawKV(page, fonts, y, leftX, rightX, "Payment", paymentValue, {
+    valueColor: method === "M-Pesa" ? COLORS.green : COLORS.charcoal,
   });
 
   y -= 6;
-  drawDashedRule(page, y, width, COLORS.fence, 90);
-  y -= 20;
+  drawDashedRule(page, y, PAGE.width, COLORS.fence, MARGIN);
+  y -= 18;
 
-  const itemsLeftX = 90;
-  const itemsRightX = width - 90;
-
-  drawReceiptRow(
-    page,
-    fonts.bold,
-    y,
-    itemsLeftX,
-    itemsRightX,
-    "ITEM",
-    "AMOUNT",
-    COLORS.charcoal
-  );
-  y -= 14;
-  drawDashedRule(page, y, width, COLORS.fence, 90);
+  drawReceiptRow(page, fonts.bold, y, leftX, rightX, "ITEM", "AMOUNT", COLORS.charcoal);
+  y -= 12;
+  drawDashedRule(page, y, PAGE.width, COLORS.fence, MARGIN);
   y -= 16;
 
-  let subtotal = 0;
-  for (const item of items) {
-    if (y < 100) break;
-    const lineTotal = item.qty * item.unitPrice;
-    subtotal += lineTotal;
+  if (lines.length === 0) {
+    ensureSpace(20);
+    drawReceiptRow(page, fonts.regular, y, leftX, rightX, "(No line items)", "", COLORS.slate);
+    y -= 18;
+  }
 
+  for (const item of lines) {
+    ensureSpace(36);
     drawReceiptRow(
       page,
       fonts.regular,
       y,
-      itemsLeftX,
-      itemsRightX,
-      truncate(item.description, 36),
-      formatKSh(lineTotal),
+      leftX,
+      rightX,
+      truncate(item.description, 40),
+      formatKSh(item.lineTotal),
       COLORS.charcoal
     );
-    y -= 13;
+    y -= 14;
     drawReceiptRow(
       page,
       fonts.oblique,
       y,
-      itemsLeftX,
-      itemsRightX,
+      leftX,
+      rightX,
       `  ${item.qty} x ${formatKSh(item.unitPrice)}`,
       "",
       COLORS.slate,
@@ -187,38 +194,36 @@ export async function generateReceipt(data: ReceiptInput): Promise<Uint8Array> {
     y -= 18;
   }
 
-  // Full total even if some lines skipped for space
-  subtotal = items.reduce((s, it) => s + it.qty * it.unitPrice, 0);
-
-  drawDashedRule(page, y, width, COLORS.fence, 90);
-  y -= 22;
+  ensureSpace(90);
+  drawDashedRule(page, y, PAGE.width, COLORS.fence, MARGIN);
+  y -= 20;
 
   drawReceiptRow(
     page,
     fonts.regular,
     y,
-    itemsLeftX,
-    itemsRightX,
+    leftX,
+    rightX,
     "Subtotal",
     formatKSh(subtotal),
     COLORS.charcoal
   );
-  y -= 20;
+  y -= 18;
   drawReceiptRow(
     page,
     fonts.bold,
     y,
-    itemsLeftX,
-    itemsRightX,
+    leftX,
+    rightX,
     "TOTAL PAID",
     formatKSh(subtotal),
     COLORS.green,
     13
   );
-  y -= 30;
+  y -= 28;
 
-  drawDashedRule(page, y, width, COLORS.yellow, 90);
-  y -= 26;
+  drawDashedRule(page, y, PAGE.width, COLORS.yellow, MARGIN);
+  y -= 24;
 
   drawCentered(page, "Thank you for farming with KukuConnect!", {
     y,
@@ -227,14 +232,62 @@ export async function generateReceipt(data: ReceiptInput): Promise<Uint8Array> {
     color: COLORS.orange,
   });
   y -= 16;
-  drawCentered(page, BRAND_CONTACT, {
+  drawCentered(page, pdfSafeText(BRAND_CONTACT), {
     y,
     size: 8,
     font: fonts.regular,
     color: COLORS.slate,
   });
 
+  drawPageFooter(page, fonts);
+
   return pdfDoc.save();
+}
+
+function normalizePayment(method: string | undefined): string {
+  const m = pdfSafeText(method || "Cash");
+  if ((PAYMENT_METHODS as readonly string[]).includes(m)) return m;
+  // Accept free-text methods without failing the whole PDF
+  return m || "Cash";
+}
+
+function safeDate(date: Date | string): Date {
+  const d = date instanceof Date ? date : new Date(date);
+  return Number.isNaN(d.getTime()) ? new Date() : d;
+}
+
+function drawContinuedHeader(
+  page: PDFPage,
+  fonts: BrandFonts,
+  y: number,
+  receiptNumber: string
+): number {
+  drawCentered(page, "RECEIPT (continued)", {
+    y,
+    size: 11,
+    font: fonts.bold,
+    color: COLORS.charcoal,
+  });
+  y -= 14;
+  drawCentered(page, pdfSafeText(receiptNumber), {
+    y,
+    size: 9,
+    font: fonts.regular,
+    color: COLORS.slate,
+  });
+  y -= 12;
+  drawDashedRule(page, y, PAGE.width, COLORS.fence, MARGIN);
+  return y - 16;
+}
+
+function drawPageFooter(page: PDFPage, fonts: BrandFonts) {
+  page.drawText(pdfSafeText("KukuConnect · Kitui, Kenya"), {
+    x: MARGIN,
+    y: 28,
+    size: 8,
+    font: fonts.regular,
+    color: COLORS.slate,
+  });
 }
 
 // ---- helpers -----------------------------------------------------------
@@ -247,15 +300,13 @@ function drawCentered(
     size: number;
     font: PDFFont;
     color: RGB;
-    tracking?: number;
   }
 ) {
-  const { y, size, font, color, tracking = 0 } = opts;
-  const { width } = page.getSize();
-  const display = tracking >= 2 ? text.split("").join(" ") : text;
+  const { y, size, font, color } = opts;
+  const display = pdfSafeText(text);
   const w = font.widthOfTextAtSize(display, size);
   page.drawText(display, {
-    x: width / 2 - w / 2,
+    x: PAGE.width / 2 - w / 2,
     y,
     size,
     font,
@@ -273,8 +324,10 @@ function drawKV(
   value: string,
   opts: { valueColor?: RGB } = {}
 ) {
-  const size = 9.5;
-  page.drawText(label, {
+  const size = 10;
+  const safeLabel = pdfSafeText(label);
+  const safeValue = pdfSafeText(value);
+  page.drawText(safeLabel, {
     x: leftX,
     y,
     size,
@@ -282,15 +335,15 @@ function drawKV(
     color: COLORS.slate,
   });
   const valueColor = opts.valueColor || COLORS.charcoal;
-  const valueWidth = fonts.bold.widthOfTextAtSize(value, size);
-  page.drawText(value, {
+  const valueWidth = fonts.bold.widthOfTextAtSize(safeValue, size);
+  page.drawText(safeValue, {
     x: rightX - valueWidth,
     y,
     size,
     font: fonts.bold,
     color: valueColor,
   });
-  return y - 15;
+  return y - 16;
 }
 
 function drawReceiptRow(
@@ -304,10 +357,11 @@ function drawReceiptRow(
   color: RGB,
   size = 10.5
 ) {
-  page.drawText(left, { x: leftX, y, size, font, color });
+  page.drawText(pdfSafeText(left), { x: leftX, y, size, font, color });
   if (right) {
-    const rightWidth = font.widthOfTextAtSize(right, size);
-    page.drawText(right, {
+    const safeRight = pdfSafeText(right);
+    const rightWidth = font.widthOfTextAtSize(safeRight, size);
+    page.drawText(safeRight, {
       x: rightX - rightWidth,
       y,
       size,
@@ -322,7 +376,7 @@ function drawDashedRule(
   y: number,
   pageWidth: number,
   color: RGB,
-  margin = 90
+  margin = MARGIN
 ) {
   page.drawLine({
     start: { x: margin, y },
@@ -334,8 +388,9 @@ function drawDashedRule(
 }
 
 function truncate(str: string, max: number) {
-  if (!str) return "";
-  return str.length > max ? `${str.slice(0, max - 1)}…` : str;
+  const s = pdfSafeText(str);
+  if (!s) return "";
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
 }
 
 function receiptNumberFromSale(sale: Sale): string {
@@ -349,28 +404,37 @@ export async function generateReceiptPdf(
   sale: Sale,
   options?: { openWhatsApp?: boolean }
 ): Promise<void> {
-  const logoBytes = await loadPublicLogoBytes();
-  const bytes = await generateReceipt({
-    receiptNumber: receiptNumberFromSale(sale),
-    refNumber: sale.id,
-    date: sale.createdAt ? new Date(sale.createdAt) : new Date(),
-    customerName: sale.customer || "Walk-in Customer",
-    customerPhone: sale.customerPhone || "",
-    items: sale.items.map((i) => ({
-      description: i.name,
-      qty: i.qty,
-      unitPrice: i.price,
-    })),
-    paymentMethod: sale.paymentMethod || "Cash",
-    mpesaCode: sale.mpesaCode || "",
-    servedBy: sale.servedBy || "",
-    logoBytes,
-  });
+  try {
+    const logoBytes = await loadPublicLogoBytes();
+    const bytes = await generateReceipt({
+      receiptNumber: receiptNumberFromSale(sale),
+      refNumber: sale.id,
+      date: sale.createdAt ? new Date(sale.createdAt) : new Date(),
+      customerName: sale.customer || "Walk-in Customer",
+      customerPhone: sale.customerPhone || "",
+      items: (sale.items || []).map((i) => ({
+        description: i.name,
+        qty: i.qty,
+        unitPrice: i.price,
+      })),
+      paymentMethod: sale.paymentMethod || "Cash",
+      mpesaCode: sale.mpesaCode || "",
+      servedBy: sale.servedBy || "",
+      logoBytes,
+    });
 
-  downloadPdfBytes(
-    bytes,
-    `KukuConnect-Receipt-${receiptNumberFromSale(sale)}.pdf`
-  );
+    downloadPdfBytes(
+      bytes,
+      `KukuConnect-Receipt-${receiptNumberFromSale(sale)}.pdf`
+    );
+  } catch (err) {
+    console.error("Receipt PDF failed", err);
+    throw new Error(
+      err instanceof Error
+        ? `Could not create receipt PDF: ${err.message}`
+        : "Could not create receipt PDF"
+    );
+  }
 
   if (options?.openWhatsApp && sale.customerPhone) {
     const total = formatKSh(sale.total);
@@ -378,7 +442,7 @@ export async function generateReceiptPdf(
       `KukuConnect Receipt\n` +
       `No: ${receiptNumberFromSale(sale)}\n` +
       `Date: ${sale.dateLabel}\n` +
-      `Total: *${total}*\n\nAsante! — KukuConnect Kitui`;
+      `Total: *${total}*\n\nAsante! - KukuConnect Kitui`;
     const phone = sale.customerPhone.replace(/[^\d+]/g, "");
     const normalized = phone.startsWith("0")
       ? `254${phone.slice(1)}`

@@ -23,9 +23,9 @@ import {
 import { type Expense, getMonthExpenses } from "@/lib/expenses";
 import { listBatches } from "@/lib/data/incubationRepo";
 import { listItems } from "@/lib/data/inventoryRepo";
-import { listSales } from "@/lib/data/salesRepo";
-import { listExpenses } from "@/lib/data/expensesRepo";
-import { listOrders } from "@/lib/data/ordersRepo";
+import { listSalesPaginated } from "@/lib/data/salesRepo";
+import { listExpensesPaginated } from "@/lib/data/expensesRepo";
+import { listOrdersPaginated } from "@/lib/data/ordersRepo";
 import {
   type FarmerOrder,
   formatMoney,
@@ -65,12 +65,12 @@ export default function Dashboard() {
     let cancelled = false;
     (async () => {
       try {
-        const [b, i, s, e, o, lots] = await Promise.all([
+        const [b, i, sRes, eRes, oRes, lots] = await Promise.all([
           listBatches(),
           listItems(),
-          listSales(),
-          listExpenses(),
-          listOrders(),
+          listSalesPaginated(1, 200),
+          listExpensesPaginated(1, 200),
+          listOrdersPaginated(1, 200),
           listLots(),
         ]);
         if (cancelled) return;
@@ -90,9 +90,9 @@ export default function Dashboard() {
 
         setBatches(b);
         setItems(nextItems);
-        setSales(s);
-        setExpenses(e);
-        setOrders(o);
+        setSales(sRes.data);
+        setExpenses(eRes.data);
+        setOrders(oRes.data);
         setBrooderBirds(
           nextLots
             .filter((l) => l.status === "active")

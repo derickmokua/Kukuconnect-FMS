@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   type InventoryItem,
   deductForSale,
@@ -30,8 +30,9 @@ import {
   saveItems,
   saveMovements,
 } from "@/lib/data/inventoryRepo";
-import { listSales, saveSales } from "@/lib/data/salesRepo";
+import { listSalesPaginated, updateSale, deleteSaleCloud } from "@/lib/data/salesRepo";
 import { listLots, saveLots } from "@/lib/data/brooderRepo";
+import { recordSaleTransaction } from "@/lib/data/transactions";
 import { deductBrooderLotsForSale, todayIsoLocal } from "@/lib/brooder";
 import {
   Button,
@@ -72,20 +73,23 @@ export default function Sales() {
   const [mpesaCode, setMpesaCode] = useState("");
   const [servedBy, setServedBy] = useState("");
   const [receiptBusy, setReceiptBusy] = useState(false);
-  const [monthFilter, setMonthFilter] = useState(monthKeyFromDate());
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = 20;
+  const [searchQuery, setSearchQuery] = useState("");
+  const [totalCount, setTotalCount] = useState(0);
+
   const [saleDate, setSaleDate] = useState(todayIsoLocal());
   const [editDateSaleId, setEditDateSaleId] = useState<string | null>(null);
   const [editDateValue, setEditDateValue] = useState("");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
-        const [items, nextSales] = await Promise.all([listItems(), listSales()]);
+        const items = await listItems();
         if (cancelled) return;
         setInventory(items);
-        setSales(nextSales);
         const sellable = getSellableItems(items);
         if (sellable.length > 0) {
           setSelectedId(sellable[0].id);
@@ -93,15 +97,32 @@ export default function Sales() {
           setQty(Math.min(50, Math.max(1, sellable[0].quantity || 1)));
         }
       } catch (err) {
-        alert(err instanceof Error ? err.message : "Failed to load sales data");
-      } finally {
-        if (!cancelled) setHydrated(true);
+        alert(err instanceof Error ? err.message : "Failed to load inventory");
       }
     })();
     return () => {
       cancelled = true;
     };
   }, []);
+
+  const loadData = useCallback(async () => {
+    try {
+      const { data, count } = await listSalesPaginated(page, pageSize, searchQuery);
+      setSales(data);
+      setTotalCount(count);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to load sales data");
+    } finally {
+      setHydrated(true);
+    }
+  }, [page, pageSize, searchQuery]);
+
+  useEffect(() => {
+    let timeout = setTimeout(() => {
+      loadData();
+    }, 300);
+    return () => clearTimeout(timeout);
+  }, [loadData]);
 
   const sellable = useMemo(() => getSellableItems(inventory), [inventory]);
   const selected = sellable.find((i) => i.id === selectedId) ?? sellable[0];
@@ -119,13 +140,7 @@ export default function Sales() {
     : 0;
 
   const total = cart.reduce((sum, item) => sum + item.qty * item.price, 0);
-  const months = useMemo(() => availableSaleMonths(sales), [sales]);
-  const filteredSales = useMemo(
-    () => filterSalesByMonth(sales, monthFilter),
-    [sales, monthFilter]
-  );
-  const monthTotal = useMemo(() => sumSales(filteredSales), [filteredSales]);
-  const allTimeTotal = useMemo(() => sumSales(sales), [sales]);
+  const pageTotal = useMemo(() => sumSales(sales), [sales]);
 
   const onSelectItem = (itemId: string) => {
     setSelectedId(itemId);
@@ -164,40 +179,17 @@ export default function Sales() {
     const saleCreatedAt = new Date(saleDate + "T12:00:00").toISOString();
     try {
       const items = await listItems();
-      const movements = await listMovements();
-      const result = deductForSale(
-        items,
-        movements,
-        cart.map((c) => ({ itemId: c.itemId, qty: c.qty })),
-        saleId,
-        saleCreatedAt
-      );
-      if (!result.ok) {
-        alert(result.error ?? "Could not deduct stock");
-        setInventory(await listItems());
-        return;
-      }
-      await saveItems(result.items);
-      await saveMovements(result.movements);
-      setInventory(result.items);
-
-      // Deduct sold chicks from active brooder lots
-      const activeLots = await listLots();
-      const nextLots = deductBrooderLotsForSale(
-        activeLots,
-        cart.map((c) => {
-          const item = items.find((i) => i.id === c.itemId);
-          const isDiscounted = item ? c.price < item.defaultPrice : false;
-          return { itemId: c.itemId, qty: c.qty, isDiscounted };
-        })
-      );
-      await saveLots(nextLots);
+      const fullCart = cart.map((c) => {
+        const item = items.find((i) => i.id === c.itemId);
+        const isDiscounted = item ? c.price < item.defaultPrice : false;
+        return { ...c, isDiscounted };
+      });
 
       const sale = createSale({
         id: saleId,
         customer,
         customerPhone,
-        items: cart.map((c) => ({
+        items: fullCart.map((c) => ({
           itemId: c.itemId,
           name: c.name,
           qty: c.qty,
@@ -211,9 +203,10 @@ export default function Sales() {
         dateLabel: new Date(saleCreatedAt).toLocaleString("en-KE"),
       });
 
-      const nextSales = addSale(sales, sale);
-      await saveSales(nextSales);
-      setSales(nextSales);
+      await recordSaleTransaction(sale, fullCart);
+
+      setInventory(await listItems());
+      loadData();
 
       setReceiptBusy(true);
       try {
@@ -229,7 +222,6 @@ export default function Sales() {
       setCustomerPhone("");
       setMpesaCode("");
       setSaleDate(todayIsoLocal());
-      setMonthFilter(monthKeyFromDate());
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to record sale");
     }
@@ -239,8 +231,11 @@ export default function Sales() {
     if (!editDateValue) return;
     try {
       const nextSales = updateSaleDate(sales, saleId, editDateValue);
-      await saveSales(nextSales);
       setSales(nextSales);
+      const updatedSale = nextSales.find(s => s.id === saleId);
+      if (updatedSale) {
+        await updateSale(updatedSale);
+      }
 
       // Keep stock movement history aligned with the corrected business date
       const when = new Date(editDateValue + "T12:00:00").toISOString();
@@ -253,7 +248,6 @@ export default function Sales() {
       await saveMovements(nextMovements);
 
       setEditDateSaleId(null);
-      setMonthFilter(monthKeyFromDate(new Date(editDateValue + "T12:00:00")));
     } catch (err) {
       alert(err instanceof Error ? err.message : "Failed to save sale date");
     }
@@ -457,53 +451,40 @@ export default function Sales() {
         </>
       ) : (
         <>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <Card variant="metric">
               <CardBody>
-                <p className="font-label-caps text-tertiary-container">
-                  {formatMonthLabel(monthFilter)}
-                </p>
+                <p className="font-label-caps text-tertiary-container">Page Total</p>
                 <p className="tabular-money text-2xl text-on-surface mt-2">
-                  KSh {monthTotal.toLocaleString()}
+                  KSh {pageTotal.toLocaleString()}
                 </p>
                 <p className="text-xs text-on-surface-variant mt-1">
-                  {filteredSales.length} sale
-                  {filteredSales.length === 1 ? "" : "s"}
-                </p>
-              </CardBody>
-            </Card>
-            <Card variant="metric">
-              <CardBody>
-                <p className="font-label-caps text-secondary">All time</p>
-                <p className="tabular-money text-2xl text-on-surface mt-2">
-                  KSh {allTimeTotal.toLocaleString()}
+                  {sales.length} sale{sales.length === 1 ? "" : "s"}
                 </p>
               </CardBody>
             </Card>
             <Card>
               <CardBody className="space-y-3">
-                <Field label="Month">
-                  <Select
-                    value={monthFilter}
-                    onChange={(e) => setMonthFilter(e.target.value)}
-                  >
-                    {months.map((m) => (
-                      <option key={m} value={m}>
-                        {formatMonthLabel(m)}
-                      </option>
-                    ))}
-                  </Select>
+                <Field label="Search Sales">
+                  <Input
+                    placeholder="Search by customer or receipt..."
+                    value={searchQuery}
+                    onChange={(e) => {
+                      setSearchQuery(e.target.value);
+                      setPage(1);
+                    }}
+                  />
                 </Field>
                 <Button
                   variant="gold"
                   className="w-full"
-                  disabled={receiptBusy || filteredSales.length === 0}
+                  disabled={receiptBusy || sales.length === 0}
                   onClick={async () => {
                     setReceiptBusy(true);
                     try {
                       await downloadSalesReportPdf({
-                        sales: filteredSales,
-                        monthKey: monthFilter,
+                        sales: sales,
+                        monthKey: "Current Page",
                       });
                     } catch (err) {
                       alert(
@@ -522,13 +503,13 @@ export default function Sales() {
             </Card>
           </div>
 
-          {filteredSales.length === 0 ? (
-            <EmptyState icon="receipt_long" title="No sales this month">
-              Switch to Record to log a sale.
+          {sales.length === 0 ? (
+            <EmptyState icon="receipt_long" title="No sales found">
+              Adjust search or switch to Record to log a sale.
             </EmptyState>
           ) : (
             <div className="space-y-3">
-              {filteredSales.map((sale) => (
+              {sales.map((sale) => (
                 <Card key={sale.id}>
                   <CardBody className="space-y-3">
                     <div className="flex flex-col sm:flex-row sm:justify-between gap-2">
@@ -652,7 +633,11 @@ export default function Sales() {
                           )
                             return;
                           const next = deleteSale(sales, sale.id);
-                          await saveSales(next);
+                          try {
+                            await deleteSaleCloud(sale.id);
+                          } catch (e) {
+                            console.error("Failed to delete sale from cloud", e);
+                          }
                           setSales(next);
                         }}
                       >
@@ -662,6 +647,27 @@ export default function Sales() {
                   </CardBody>
                 </Card>
               ))}
+              {totalCount > pageSize && (
+                <div className="flex justify-between items-center py-4">
+                  <button
+                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+                  >
+                    Previous
+                  </button>
+                  <span className="text-sm text-on-surface-variant">
+                    Page {page} of {Math.ceil(totalCount / pageSize)} ({totalCount} total)
+                  </span>
+                  <button
+                    onClick={() => setPage((p) => p + 1)}
+                    disabled={page >= Math.ceil(totalCount / pageSize)}
+                    className="px-4 py-2 bg-surface-container-highest rounded-xl disabled:opacity-50"
+                  >
+                    Next
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </>
