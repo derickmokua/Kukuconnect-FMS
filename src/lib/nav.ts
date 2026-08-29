@@ -9,6 +9,7 @@ export const MAIN_NAV: NavItem[] = [
   { href: "/", label: "Dashboard", icon: "dashboard", match: "exact" },
   { href: "/orders", label: "Orders", icon: "shopping_bag" },
   { href: "/sales", label: "Sales", icon: "payments" },
+  { href: "/customers", label: "Customers", icon: "group" },
   { href: "/inventory", label: "Inventory", icon: "inventory_2" },
   { href: "/brooder", label: "Active Flocks", icon: "house" },
   { href: "/incubation", label: "Incubation", icon: "egg" },
@@ -20,6 +21,7 @@ export function pageTitle(pathname: string): string {
   if (pathname === "/") return "Dashboard";
   if (pathname.startsWith("/orders")) return "Orders";
   if (pathname.startsWith("/sales")) return "Sales & Receipts";
+  if (pathname.startsWith("/customers")) return "Customer CRM & Follow-ups";
   if (pathname.startsWith("/inventory")) return "Inventory";
   if (pathname.startsWith("/brooder")) return "Active Flocks";
   if (pathname.startsWith("/incubation")) return "Incubation";
