@@ -1,6 +1,7 @@
 "use client";
 
 import { FormEvent, Suspense, useState } from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAuth } from "@/components/AuthProvider";
 import { isSupabaseConfigured } from "@/lib/supabase/config";
@@ -39,13 +40,13 @@ function LoginForm() {
           <code className="text-secondary">.env.local</code> / Vercel, run the SQL
           files, then redeploy.
         </p>
-        <a
+        <Link
           href="/"
           className="inline-flex items-center gap-1 text-primary font-medium hover:underline text-sm"
         >
           <span className="material-symbols-outlined text-base">home</span>
           Back to dashboard
-        </a>
+        </Link>
       </div>
     );
   }
